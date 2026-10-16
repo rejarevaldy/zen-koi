@@ -57,7 +57,6 @@ type PondState = PluginRpcResult<(typeof rpcContract)["getPond"]>;
 
 // Declared in package.json under bb.branding.experimental_icons.
 const KOI_ICON = "zen-koi/koi";
-const SOUND_ICON = "zen-koi/sound";
 const PAGE_PATH = "pond";
 const SETTINGS_ACTION = "pond-settings";
 
@@ -777,7 +776,6 @@ function ThreadPond({
   const navigate = useBbNavigate();
   const reducedMotion = useReducedMotion();
   const { config, recordScoop } = usePondState();
-  const sound = useSoundPrefs();
   const session = useSession(threadId);
   const [hidden, setHidden] = useStoredFlag(`${pluginId}.hidden`);
   const [running, setRunning] = useState(isRunning);
@@ -929,19 +927,9 @@ function ThreadPond({
         >
           <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
         </div>
-        <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
-          <div className="flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-300 group-focus-within:opacity-100 group-hover:opacity-100">
-            <IconButton
-              label={sound.enabled ? "Mute the pond" : "Play the pond's sounds"}
-              icon={SOUND_ICON}
-              pressed={sound.enabled}
-              onClick={() => setSoundPrefs({ ...sound, enabled: !sound.enabled })}
-            />
+        <div className="pointer-events-none absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-300 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
             <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
-          </div>
-          <div className="rounded-lg bg-black/40 shadow-sm backdrop-blur-sm">
             <IconButton label="Open pond settings" icon="Settings" onClick={openSettings} />
-          </div>
         </div>
         <div className="pointer-events-none absolute right-1.5 bottom-1.5 left-1.5 flex items-end justify-between gap-2">
           {hud.breath ? <BreathGuide phase={hud.breath} dotRef={breathDotRef} /> : null}
@@ -1290,7 +1278,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
           </div>
         </header>
         {error ? <p className="text-xs text-destructive">Could not save the pond: {error}</p> : null}
-        <div role="group" aria-label="Pond settings" className="flex gap-1 overflow-x-auto rounded-lg bg-muted p-1">
+        <div role="group" aria-label="Pond settings" className="sticky top-0 z-10 flex gap-1 overflow-x-auto rounded-lg bg-muted p-1">
           {([
             ["display", "Display"], ["koi", "Koi"], ["garden", "Garden"], ["ambience", "Ambience"],
           ] as const).map(([tab, label]) => (
@@ -1353,7 +1341,12 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
                 />
               ))}
             </ul>
-            <AddKoi config={config} onAdd={(entry) => update({ koi: [...config.koi, entry] })} />
+            <details className="rounded-lg border border-border/60">
+              <summary className="cursor-pointer px-3 py-2 text-xs text-foreground">Add koi</summary>
+              <div className="p-2 pt-0">
+                <AddKoi config={config} onAdd={(entry) => update({ koi: [...config.koi, entry] })} />
+              </div>
+            </details>
           </Section>
           ) : null}
 
