@@ -333,9 +333,6 @@ function sameHud(a: Hud, b: Hud): boolean {
 
 type News = { text: string; until: number };
 
-/** The strip's small glassy pills, top right. */
-const PILL = "flex h-8 items-center gap-0.5 rounded-lg bg-black/40 p-0.5 shadow-sm backdrop-blur-sm";
-
 const CATCH_HINT = "Koi pond. The poi moves by itself; tap, or press Space or Enter, when a ! shows over it to scoop.";
 
 function koiName(config: PondConfig, id: string): string {
@@ -361,10 +358,10 @@ function playEvents(
       case "scooped":
         ambience.splash();
         onScoop(event.koiId);
-        news = { text: `Caught ${koiName(config, event.koiId)}!`, until };
+        news = { text: `Caught ${koiName(config, event.koiId)}`, until };
         break;
       case "missed":
-        news = { text: "Koi swam away", until };
+        news = { text: "Swam away", until };
         break;
       case "early":
         news = { text: "Too soon", until };
@@ -384,8 +381,8 @@ function playEvents(
 function catchStatus(sukui: Sukui, news: News | null, now: number): string {
   if (news && now < news.until) return news.text;
   if (sukui.torn) return "New scoop soon";
-  if (sukui.phase.kind === "bite") return "Tap now!";
-  return isAuto(sukui) ? "Auto · tap at !" : "Wait for !";
+  if (sukui.phase.kind === "bite") return "Tap now";
+  return isAuto(sukui) ? "Tap when ! shows" : "Wait for !";
 }
 
 type LoopOptions = {
@@ -655,7 +652,7 @@ function IconButton({
 function Glass({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div
-      className={`rounded-md bg-black/40 px-2 py-0.5 text-[11px] text-white/90 shadow-sm backdrop-blur-sm ${className}`}
+      className={`rounded-md bg-black/25 px-2 py-0.5 text-[11px] text-white/80 backdrop-blur-sm transition-colors duration-500 ${className}`}
     >
       {children}
     </div>
@@ -685,21 +682,10 @@ function BreathGuide({
 function CatchHud({ hud, grade }: { hud: Hud; grade: PoiGrade }) {
   if (hud.status === null || hud.paper === null) return null;
   return (
-    <Glass className={`inline-flex max-w-full items-center whitespace-nowrap ${hud.bite ? "bg-amber-500/80 text-black" : ""}`}>
+    <Glass className={`inline-flex max-w-full items-center whitespace-nowrap ${hud.bite ? "bg-amber-300/25 text-amber-50" : ""}`}>
       <span className="sr-only">No.{grade} paper: {hud.paper * 10}% left.</span>
       <span aria-live="polite">{hud.status}</span>
     </Glass>
-  );
-}
-
-/** The poi's status inside the strip's control group; amber while a koi bites. */
-function CatchStatus({ hud, grade }: { hud: Hud; grade: PoiGrade }) {
-  if (hud.status === null || hud.paper === null) return null;
-  return (
-    <span className={`min-w-24 rounded-md px-1.5 py-1 text-center whitespace-nowrap ${hud.bite ? "bg-amber-500/80 text-black" : ""}`}>
-      <span className="sr-only">No.{grade} paper: {hud.paper * 10}% left.</span>
-      <span aria-live="polite">{hud.status}</span>
-    </span>
   );
 }
 
@@ -720,7 +706,7 @@ function CatchSummary({
     .join(", ");
   const total = session.scooped.length;
   return (
-    <span className="flex items-center gap-0.5 whitespace-nowrap pl-1.5" title={names}>
+    <Glass className="pointer-events-auto flex items-center gap-1 whitespace-nowrap">
       <span>
         {total} caught<span className="sr-only"> while your agent worked: {names}</span>
       </span>
@@ -732,7 +718,7 @@ function CatchSummary({
       >
         ×
       </button>
-    </span>
+    </Glass>
   );
 }
 
@@ -934,48 +920,30 @@ function ThreadPond({
         >
           <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
         </div>
-        {/* One group at the top right. Its controls fade in only while this corner is
-            hovered or the pond has keyboard focus, and always keep their place, so the
-            status beside them never jumps. */}
-        <div className="group/bar absolute top-1.5 right-1.5 flex items-center gap-1 text-[11px] text-white/90">
-          <div className={`${PILL} pointer-events-none opacity-0 transition-opacity duration-300 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover/bar:pointer-events-auto group-hover/bar:opacity-100`}>
-            <div role="group" aria-label="What the pond shows" className="flex items-center">
-              {(["pond", "catch"] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  aria-pressed={view === option}
-                  onClick={() => setViewOverride(threadId, option)}
-                  className={`rounded-md px-1.5 py-1 transition-colors hover:bg-white/15 hover:text-white ${
-                    view === option ? "bg-white/15 text-white" : "text-white/70"
-                  }`}
-                >
-                  {option === "pond" ? "Pond" : "Catch"}
-                </button>
-              ))}
-            </div>
+        {/* Controls at the top right, shown while that corner is hovered or the pond has keyboard focus. */}
+        <div className="group/bar absolute top-1.5 right-1.5">
+          <div className="pointer-events-none flex items-center gap-0.5 rounded-lg bg-black/25 p-0.5 text-[11px] opacity-0 backdrop-blur-sm transition-opacity duration-300 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover/bar:pointer-events-auto group-hover/bar:opacity-100">
+            <button
+              type="button"
+              onClick={() => setViewOverride(threadId, view === "catch" ? "pond" : "catch")}
+              className="rounded-md px-2 py-1 text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+            >
+              {view === "catch" ? "Watch" : "Catch"}
+            </button>
             <IconButton label="Open pond settings" icon="Settings" onClick={openSettings} />
             <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
           </div>
-          {view === "catch" ? (
-            <div className={PILL}>
-              <CatchStatus hud={hud} grade={config.poi} />
-            </div>
-          ) : summary ? (
-            <div className={PILL}>
-              <CatchSummary session={summary} config={config} onDismiss={dismissSummary} />
-            </div>
-          ) : (
-            <div className={`${PILL} w-8 justify-center opacity-60 transition-opacity group-hover/bar:opacity-100`}>
-              <Icon name={KOI_ICON} className="size-3.5" aria-hidden />
-            </div>
-          )}
         </div>
-        {hud.breath ? (
-          <div className="pointer-events-none absolute bottom-1.5 left-1.5">
-            <BreathGuide phase={hud.breath} dotRef={breathDotRef} />
+        <div className="pointer-events-none absolute right-1.5 bottom-1.5 left-1.5 flex items-end justify-between gap-2">
+          {hud.breath ? <BreathGuide phase={hud.breath} dotRef={breathDotRef} /> : null}
+          <div className="ml-auto flex min-w-0 justify-end">
+            {view === "catch" ? (
+              <CatchHud hud={hud} grade={config.poi} />
+            ) : summary ? (
+              <CatchSummary session={summary} config={config} onDismiss={dismissSummary} />
+            ) : null}
           </div>
-        ) : null}
+        </div>
       </section>
     );
   }

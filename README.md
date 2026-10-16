@@ -55,9 +55,9 @@ It has its own art and code.
 - **Above the chat input.** Show the pond while the agent works, always, or
   only on the page.
 
-The strip keeps one small group at its top right: the catch status, plus
-Pond/Catch, settings, and hide, which appear on hover or keyboard focus. Sound
-lives in the settings panel. Clicking the pond never
+Hover the strip's top-right corner (or focus the pond from the keyboard) for
+its few controls: Catch or Watch, settings, and hide. The catch status sits
+quietly at the bottom right. Sound lives in the settings panel. Clicking the pond never
 takes focus from the chat input. The pond honors reduced motion.
 
 ## Install
