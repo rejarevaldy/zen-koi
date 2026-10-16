@@ -981,16 +981,14 @@ function Section({
   description,
   children,
   className = "",
-  sectionRef,
 }: {
   title: string;
   description?: string;
   children: ReactNode;
   className?: string;
-  sectionRef?: RefObject<HTMLElement | null>;
 }) {
   return (
-    <section ref={sectionRef} className={`flex flex-col gap-3 rounded-xl border border-border bg-card p-4 ${className}`}>
+    <section className={`flex flex-col gap-3 rounded-xl border border-border bg-card p-4 ${className}`}>
       <div>
         <h2 className="text-sm font-medium text-foreground">{title}</h2>
         {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
@@ -1234,7 +1232,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
   const { config, scoops, error, save, recordScoop } = usePondState();
   const sound = useSoundPrefs();
   const [pageView, setPageView] = useState<View>("pond");
-  const gardenRef = useRef<HTMLElement | null>(null);
+  const [settingsTab, setSettingsTab] = useState<"display" | "koi" | "garden" | "ambience">("display");
   const session = useSession(threadId ?? "");
   const override = useViewOverride(threadId ?? "");
   const view = threadId ? override ?? (session && !session.ended ? config.views.working : "pond") : pageView;
@@ -1251,7 +1249,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
     world,
     config,
     view,
-    rows: PAGE_ROWS,
+    rows: threadId ? STRIP_ROWS : PAGE_ROWS,
     canvasRef,
     focusCanvas: false,
     reducedMotion,
@@ -1289,30 +1287,25 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
                 { value: "catch", label: "Catch" },
               ]}
             />
-            <button
-              type="button"
-              onClick={() => gardenRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-              className="rounded-lg bg-muted px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              Garden
-            </button>
-            <button
-              type="button"
-              aria-pressed={sound.enabled}
-              onClick={() => setSoundPrefs({ ...sound, enabled: !sound.enabled })}
-              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
-                sound.enabled
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Icon name={SOUND_ICON} className="size-3.5" aria-hidden />
-              {sound.enabled ? "Sound on" : "Sound off"}
-            </button>
           </div>
         </header>
         {error ? <p className="text-xs text-destructive">Could not save the pond: {error}</p> : null}
-        {view === "catch" ? (
+        <div role="group" aria-label="Pond settings" className="flex gap-1 overflow-x-auto rounded-lg bg-muted p-1">
+          {([
+            ["display", "Display"], ["koi", "Koi"], ["garden", "Garden"], ["ambience", "Ambience"],
+          ] as const).map(([tab, label]) => (
+            <button
+              key={tab}
+              type="button"
+              aria-pressed={settingsTab === tab}
+              onClick={() => setSettingsTab(tab)}
+              className={`shrink-0 rounded-md px-3 py-1.5 text-xs transition-colors ${settingsTab === tab ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {view === "catch" && settingsTab === "display" ? (
           <p className="text-xs text-muted-foreground">
             Tap the water to place the scoop. When a ! appears, tap again to catch. Auto catch resumes after 15 seconds.
           </p>
@@ -1328,18 +1321,19 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
                 : "Koi pond. Click to scatter a little food."
             }
             className="block w-full cursor-pointer touch-none overflow-hidden outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-            style={{ height: PAGE_ROWS * PIXEL_SCALE }}
+            style={{ height: (threadId ? STRIP_ROWS : PAGE_ROWS) * PIXEL_SCALE }}
             {...controls}
           >
             <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
           </div>
           <div className="pointer-events-none absolute right-2 bottom-2 left-2 flex items-end justify-between gap-2">
-            <div className="min-w-0">{view === "catch" ? <CatchHud hud={hud} grade={config.poi} /> : null}</div>
             {hud.breath ? <BreathGuide phase={hud.breath} dotRef={breathDotRef} /> : null}
+            <div className="ml-auto flex min-w-0 justify-end">{view === "catch" ? <CatchHud hud={hud} grade={config.poi} /> : null}</div>
           </div>
         </div>
 
         <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-4">
+          {settingsTab === "koi" ? (
           <Section
             title="Your koi"
             description="Koi grow over their first two weeks. Released koi swim off for good."
@@ -1361,7 +1355,9 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
             </ul>
             <AddKoi config={config} onAdd={(entry) => update({ koi: [...config.koi, entry] })} />
           </Section>
+          ) : null}
 
+          {settingsTab === "display" ? (
           <Section title="Above the chat input" description="What a thread's pond shows, and when.">
             <Row label="While the agent works" hint="Catch koi with a paper poi, or just watch.">
               <Segmented<View>
@@ -1389,7 +1385,9 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
               The Pond and Catch switch above changes this thread's view until the agent starts or stops.
             </p>
           </Section>
+          ) : null}
 
+          {settingsTab === "display" ? (
           <Section
             title="Catching koi"
             description="Tap once to place the scoop, then tap when a koi appears over it."
@@ -1407,8 +1405,10 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
               />
             </Row>
           </Section>
+          ) : null}
 
-          <Section title="Garden" description="What grows around the water." sectionRef={gardenRef} className="scroll-mt-4">
+          {settingsTab === "garden" ? (
+          <Section title="Garden" description="What grows around the water.">
             <Row label="Pond layout" hint="Shoreline, stones, pads, and which side the tree stands on.">
               <div className="flex items-center gap-2">
                 <button
@@ -1449,7 +1449,9 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
               />
             </Row>
           </Section>
+          ) : null}
 
+          {settingsTab === "ambience" ? (
           <Section title="Ambience" description="Auto follows your calendar and clock, with rain now and then.">
             <Row label="Season">
               <Segmented
@@ -1514,6 +1516,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
               />
             </Row>
           </Section>
+          ) : null}
         </div>
       </div>
     </div>
