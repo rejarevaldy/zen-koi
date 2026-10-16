@@ -359,14 +359,14 @@ function playEvents(
       case "scooped":
         ambience.splash();
         onScoop(event.koiId);
-        news = { text: `Scooped ${koiName(config, event.koiId)}!`, until };
+        news = { text: `Caught ${koiName(config, event.koiId)}!`, until };
         break;
       case "missed":
-        news = { text: `${koiName(config, event.koiId)} swam off`, until };
+        news = { text: "Koi swam away", until };
         break;
       case "torn":
         ambience.tear();
-        news = { text: "The paper tore. A fresh poi is coming", until };
+        news = { text: "New scoop soon", until };
         break;
       case "released":
         ambience.plop();
@@ -381,13 +381,13 @@ function catchStatus(sukui: Sukui, news: News | null, now: number): string {
   const auto = isAuto(sukui);
   switch (sukui.phase.kind) {
     case "bite":
-      return auto ? "A koi is over the poi…" : "Now! Tap to scoop";
+      return auto ? "Auto catch" : "Tap now!";
     case "moving":
-      return auto ? "Finding a quiet spot" : "Moving the poi";
+      return auto ? "Auto catch" : "Moving scoop";
     case "waiting":
-      return "Waiting for a koi";
+      return auto ? "Auto catch" : "Wait for koi";
     case "cooldown":
-      return sukui.torn ? "A fresh poi is coming" : "Into the bowl";
+      return sukui.torn ? "New scoop soon" : auto ? "Auto catch" : "Wait for koi";
   }
 }
 
@@ -689,17 +689,9 @@ function BreathGuide({
 function CatchHud({ hud, grade }: { hud: Hud; grade: PoiGrade }) {
   if (hud.status === null || hud.paper === null) return null;
   return (
-    <Glass className={`flex items-center gap-2 ${hud.bite && !hud.auto ? "bg-amber-500/80 text-black" : ""}`}>
-      <span className="opacity-70">No.{grade}</span>
-      <span
-        className="flex h-1.5 w-10 overflow-hidden rounded-full bg-white/25"
-        aria-label={`Paper ${hud.paper * 10}%`}
-      >
-        <span className="block h-full bg-white/90" style={{ width: `${hud.paper * 10}%` }} />
-      </span>
+    <Glass className={`inline-flex max-w-full items-center whitespace-nowrap ${hud.bite && !hud.auto ? "bg-amber-500/80 text-black" : ""}`}>
+      <span className="sr-only">No.{grade} paper: {hud.paper * 10}% left.</span>
       <span aria-live="polite">{hud.status}</span>
-      {hud.inBowl > 0 ? <span className="opacity-70">· {hud.inBowl} in the bowl</span> : null}
-      {hud.auto && !hud.bite ? <span className="opacity-60">· tap the water to play</span> : null}
     </Glass>
   );
 }
@@ -938,9 +930,6 @@ function ThreadPond({
           <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
         </div>
         <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
-          <div className="rounded-lg bg-black/40 shadow-sm backdrop-blur-sm">
-            <IconButton label="Open pond settings" icon="Settings2" onClick={openSettings} />
-          </div>
           <div className="flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-300 group-focus-within:opacity-100 group-hover:opacity-100">
             <IconButton
               label={sound.enabled ? "Mute the pond" : "Play the pond's sounds"}
@@ -950,10 +939,13 @@ function ThreadPond({
             />
             <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
           </div>
+          <div className="rounded-lg bg-black/40 shadow-sm backdrop-blur-sm">
+            <IconButton label="Open pond settings" icon="Settings" onClick={openSettings} />
+          </div>
         </div>
         <div className="pointer-events-none absolute right-1.5 bottom-1.5 left-1.5 flex items-end justify-between gap-2">
           {hud.breath ? <BreathGuide phase={hud.breath} dotRef={breathDotRef} /> : null}
-          <div className="ml-auto min-w-0">
+          <div className="ml-auto flex min-w-0 justify-end">
             {view === "catch" ? (
               <CatchHud hud={hud} grade={config.poi} />
             ) : summary ? (
@@ -989,14 +981,16 @@ function Section({
   description,
   children,
   className = "",
+  sectionRef,
 }: {
   title: string;
   description?: string;
   children: ReactNode;
   className?: string;
+  sectionRef?: RefObject<HTMLElement | null>;
 }) {
   return (
-    <section className={`flex flex-col gap-3 rounded-xl border border-border bg-card p-4 ${className}`}>
+    <section ref={sectionRef} className={`flex flex-col gap-3 rounded-xl border border-border bg-card p-4 ${className}`}>
       <div>
         <h2 className="text-sm font-medium text-foreground">{title}</h2>
         {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
@@ -1240,6 +1234,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
   const { config, scoops, error, save, recordScoop } = usePondState();
   const sound = useSoundPrefs();
   const [pageView, setPageView] = useState<View>("pond");
+  const gardenRef = useRef<HTMLElement | null>(null);
   const session = useSession(threadId ?? "");
   const override = useViewOverride(threadId ?? "");
   const view = threadId ? override ?? (session && !session.ended ? config.views.working : "pond") : pageView;
@@ -1296,6 +1291,13 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
             />
             <button
               type="button"
+              onClick={() => gardenRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              className="rounded-lg bg-muted px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Garden
+            </button>
+            <button
+              type="button"
               aria-pressed={sound.enabled}
               onClick={() => setSoundPrefs({ ...sound, enabled: !sound.enabled })}
               className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
@@ -1310,6 +1312,11 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
           </div>
         </header>
         {error ? <p className="text-xs text-destructive">Could not save the pond: {error}</p> : null}
+        {view === "catch" ? (
+          <p className="text-xs text-muted-foreground">
+            Tap the water to place the scoop. When a ! appears, tap again to catch. Auto catch resumes after 15 seconds.
+          </p>
+        ) : null}
 
         <div className="relative overflow-hidden rounded-xl border border-border bg-card">
           <div
@@ -1379,20 +1386,14 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
               />
             </Row>
             <p className="text-[11px] text-muted-foreground">
-              The Pond and Catch switch on the pond changes the view until the agent starts or stops.
+              The Pond and Catch switch above changes this thread's view until the agent starts or stops.
             </p>
           </Section>
 
           <Section
             title="Catching koi"
-            description="Koi-sukui, the festival game with a paper poi, made simple."
+            description="Tap once to place the scoop, then tap when a koi appears over it."
           >
-            <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
-              <li>Tap the water to move the poi there. It waits, and koi gather under a still poi.</li>
-              <li>When a “!” shows over the poi, tap to scoop. Wait too long and the koi swims off.</li>
-              <li>Wet paper weakens and big koi strain it. When it tears, a fresh poi comes.</li>
-              <li>Scooped koi rest in the bowl, then go back. Leave it alone and it plays by itself.</li>
-            </ul>
             <Row label="Poi paper" hint="Higher numbers are thinner, like at a real stall.">
               <Segmented<PoiGrade>
                 label="Poi paper"
@@ -1407,7 +1408,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
             </Row>
           </Section>
 
-          <Section title="Garden" description="What grows around the water.">
+          <Section title="Garden" description="What grows around the water." sectionRef={gardenRef} className="scroll-mt-4">
             <Row label="Pond layout" hint="Shoreline, stones, pads, and which side the tree stands on.">
               <div className="flex items-center gap-2">
                 <button
