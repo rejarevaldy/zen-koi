@@ -29,15 +29,12 @@ It has its own art and code.
 ## Pixel or text
 
 Settings → Display → **Look** switches the pond between pixel art and quiet
-ASCII art in your theme's own text color, with no other colors. Each
-character holds 2×4 pond pixels:
-
-- koi, the poi, the bowl, and ripples are inked boldly, denser the more of a
-  character they fill (`. : - = + * # @`)
-- the tree and lily pads are a lighter `.` and `:`
-- open water carries slow waves (`~ -`), the bank a few marks (`. , '`)
-
-ASCII art redraws at a calmer 12.5 frames a second.
+ASCII art in your theme's own text color, with no other colors. In ASCII art
+each koi is a little fish that grows longer over its first two weeks (`><>`,
+`><('>`, `><(('>`), faces the way it swims, and fades as it swims deeper. Open
+water carries a few slow `~`, the bank a few `.` and `'`. In catch, the poi is
+`( )`, a `!` shows when a koi is over it, and the bowl is `\___/`. ASCII art
+redraws at a calmer 12.5 frames a second.
 
 ## The garden and the weather
 

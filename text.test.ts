@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { RAMP, rampChar } from "./text.ts";
+import { fishFor } from "./text.ts";
 
-test("the ramp is plain ASCII, light to dense", () => {
-  assert.match(RAMP, /^[\x20-\x7e]{8}$/);
+test("a koi is an ASCII fish that grows longer", () => {
+  assert.equal(fishFor(9, true), "><>");
+  assert.equal(fishFor(11, true), "><('>");
+  assert.equal(fishFor(14, true), "><(('>");
 });
 
-test("a cell's character grows denser the more of it is inked", () => {
-  assert.equal(rampChar(0), " ");
-  assert.equal(rampChar(1), ".");
-  assert.equal(rampChar(4), "=");
-  assert.equal(rampChar(8), "@");
+test("a fish swimming left is mirrored", () => {
+  assert.equal(fishFor(9, false), "<><");
+  assert.equal(fishFor(14, false), "<'))><");
+});
+
+test("every fish is plain ASCII", () => {
+  for (const length of [9, 11, 14]) assert.match(fishFor(length, false), /^[\x20-\x7e]+$/);
 });

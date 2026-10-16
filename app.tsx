@@ -543,7 +543,7 @@ function usePondLoop(options: LoopOptions): Hud {
         if (target.height !== part.rows * scale) target.height = part.rows * scale;
         const ctx = target.getContext("2d");
         if (!ctx) return;
-        if (text) world.text.paint(ctx, world.painter, world.pond, env, now, part, world.sukui, scale, ink);
+        if (text) world.text.paint(ctx, world.painter, world.pond, now, part, world.sukui, scale, ink);
         else world.painter.paint(ctx, world.pond, env, now, part, world.sukui);
       };
       if (showCanvas) {

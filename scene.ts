@@ -533,23 +533,6 @@ export class PondPainter {
   /** Where the tree hangs over the water; petals fall from here. */
   canopy: Region | null = null;
 
-  /** The still pond (water, bank, stones) without anything on it; text art inks what differs. */
-  get still(): HTMLCanvasElement | null {
-    return this.#base;
-  }
-
-  /** The still pond with its garden (lily pads, the tree and its shade), as `paint` lays them. */
-  paintGarden(ctx: CanvasRenderingContext2D) {
-    if (this.#base) ctx.drawImage(this.#base, 0, 0);
-    if (this.#canopyShade) {
-      ctx.globalAlpha = 0.24;
-      ctx.drawImage(this.#canopyShade, 0, 0);
-      ctx.globalAlpha = 1;
-    }
-    if (this.#pads) ctx.drawImage(this.#pads, 0, 0);
-    if (this.#canopy) ctx.drawImage(this.#canopy, 0, 0);
-  }
-
   /** The first water row below the bank at column `x`. */
   shoreAt(x: number): number {
     return this.#shore[clampInt(x, 0, this.#shore.length - 1)] ?? 0;
