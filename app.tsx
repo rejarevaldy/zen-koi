@@ -62,6 +62,8 @@ const PAGE_PATH = "pond";
 const SETTINGS_ACTION = "pond-settings";
 
 const FRAME_MS = 40;
+/** How much of a light page's background washes over the pond. */
+const LIGHT_WASH = 0.16;
 /** Under reduced motion nothing moves; the pond only redraws for changes. */
 const STILL_FRAME_MS = 500;
 /** Hidden or off-screen ponds rest instead of swimming unseen. */
@@ -456,6 +458,9 @@ function usePondLoop(options: LoopOptions): Hud {
     let last = performance.now();
     let lastBreath: BreathPhase | null = null;
     let hudNow = EMPTY_HUD;
+    // The page's scheme, rechecked now and then: light pages get a lighter pond.
+    let dark = false;
+    let schemeAt = -Infinity;
 
     const tick = () => {
       if (disposed) return;
@@ -520,10 +525,17 @@ function usePondLoop(options: LoopOptions): Hud {
         addRipple(world.pond, width / 2, (SHORE_ROWS + focusBottom) / 2 + 2, 16, 3);
       }
 
+      if (now - schemeAt >= 1_000) {
+        schemeAt = now;
+        dark = getComputedStyle(document.documentElement).colorScheme.includes("dark");
+      }
       let scrim: Scrim | null = null;
+      let paper = dark ? "#18181b" : "#ffffff";
       if (showWater) {
         const look = water.look(now);
-        scrim = { color: look.background, alpha: look.dark ? 0.4 : 0.55, start: rows - 12, full: rows };
+        paper = look.background;
+        // On a light page the chat input stays light, with the koi faint beneath the text.
+        scrim = { color: look.background, alpha: look.dark ? 0.4 : 0.72, start: rows - 12, full: rows };
       }
       if (showCanvas) {
         if (canvas.width !== width) canvas.width = width;
@@ -532,7 +544,16 @@ function usePondLoop(options: LoopOptions): Hud {
         canvas.style.width = `${width * PIXEL_SCALE}px`;
         canvas.style.height = `${rows * PIXEL_SCALE}px`;
         const ctx = canvas.getContext("2d");
-        if (ctx) world.painter.paint(ctx, world.pond, env, now, { y0: 0, rows, scrim }, world.sukui);
+        if (ctx) {
+          world.painter.paint(ctx, world.pond, env, now, { y0: 0, rows, scrim }, world.sukui);
+          if (!dark) {
+            // A soft wash of the page, so the pond sits lightly in a light theme.
+            ctx.globalAlpha = LIGHT_WASH;
+            ctx.fillStyle = paper;
+            ctx.fillRect(0, 0, width, rows);
+            ctx.globalAlpha = 1;
+          }
+        }
       }
       if (showWater && waterSize) {
         const target = water.canvas;
@@ -646,8 +667,8 @@ function IconButton({
       aria-pressed={pressed}
       title={label}
       onClick={onClick}
-      className={`flex size-7 items-center justify-center rounded-md transition-colors hover:bg-white/15 hover:text-white ${
-        pressed ? "text-white" : "text-white/70"
+      className={`flex size-7 items-center justify-center rounded-md transition-colors hover:bg-foreground/10 hover:text-foreground ${
+        pressed ? "text-foreground" : "text-foreground/65"
       }`}
     >
       <Icon name={icon} className="size-3.5" aria-hidden />
@@ -671,11 +692,11 @@ function CornerControls({
 }) {
   return (
     <div className="group/bar absolute top-1.5 right-1.5">
-      <div className="pointer-events-none flex items-center gap-0.5 rounded-lg bg-black/25 p-0.5 text-[11px] opacity-0 backdrop-blur-sm transition-opacity duration-300 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover/bar:pointer-events-auto group-hover/bar:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
+      <div className="pointer-events-none flex items-center gap-0.5 rounded-lg bg-background/75 p-0.5 text-[11px] opacity-0 shadow-sm ring-1 ring-border/60 backdrop-blur-sm transition-opacity duration-300 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover/bar:pointer-events-auto group-hover/bar:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
         <button
           type="button"
           onClick={() => onView(view === "catch" ? "pond" : "catch")}
-          className="rounded-md px-2 py-1 text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+          className="rounded-md px-2 py-1 text-foreground/75 transition-colors hover:bg-foreground/10 hover:text-foreground"
         >
           {view === "catch" ? "Watch" : "Catch"}
         </button>
@@ -689,7 +710,7 @@ function CornerControls({
 function Glass({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div
-      className={`rounded-md bg-black/25 px-2 py-0.5 text-[11px] text-white/80 backdrop-blur-sm transition-colors duration-500 ${className}`}
+      className={`rounded-md bg-background/75 px-2 py-0.5 text-[11px] text-foreground/80 shadow-sm ring-1 ring-border/60 backdrop-blur-sm transition-colors duration-500 ${className}`}
     >
       {children}
     </div>
@@ -708,7 +729,7 @@ function BreathGuide({
       <span className="flex size-2.5 items-center justify-center" aria-hidden>
         <span
           ref={dotRef}
-          className="block size-2.5 rounded-full bg-white/80 transition-transform duration-100 ease-linear motion-reduce:transition-none"
+          className="block size-2.5 rounded-full bg-foreground/70 transition-transform duration-100 ease-linear motion-reduce:transition-none"
         />
       </span>
       <span aria-live="polite">{BREATH_LABEL[phase]}</span>
@@ -758,7 +779,7 @@ function CatchSummary({
         type="button"
         aria-label="Dismiss"
         onClick={onDismiss}
-        className="rounded px-1 text-white/70 hover:bg-white/15 hover:text-white"
+        className="rounded px-1 text-foreground/60 hover:bg-foreground/10 hover:text-foreground"
       >
         ×
       </button>
