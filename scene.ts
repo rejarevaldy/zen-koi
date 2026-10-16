@@ -217,14 +217,14 @@ function bayer(x: number, y: number): number {
   return BAYER[y & 3]![x & 3]! / 16;
 }
 
-function hash(seed: number, x: number, y: number): number {
+export function hash(seed: number, x: number, y: number): number {
   let h = (seed * 374761393 + x * 668265263 + y * 1274126177) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
 /** Smooth value noise in [0, 1). */
-function noise(seed: number, x: number, y: number): number {
+export function noise(seed: number, x: number, y: number): number {
   const ix = Math.floor(x);
   const iy = Math.floor(y);
   const fx = x - ix;
@@ -532,6 +532,28 @@ export class PondPainter {
   #lightAt = -Infinity;
   /** Where the tree hangs over the water; petals fall from here. */
   canopy: Region | null = null;
+
+  /** The still pond (water, bank, stones) without anything on it; text art inks what differs. */
+  get still(): HTMLCanvasElement | null {
+    return this.#base;
+  }
+
+  /** The still pond with its garden (lily pads, the tree and its shade), as `paint` lays them. */
+  paintGarden(ctx: CanvasRenderingContext2D) {
+    if (this.#base) ctx.drawImage(this.#base, 0, 0);
+    if (this.#canopyShade) {
+      ctx.globalAlpha = 0.24;
+      ctx.drawImage(this.#canopyShade, 0, 0);
+      ctx.globalAlpha = 1;
+    }
+    if (this.#pads) ctx.drawImage(this.#pads, 0, 0);
+    if (this.#canopy) ctx.drawImage(this.#canopy, 0, 0);
+  }
+
+  /** The first water row below the bank at column `x`. */
+  shoreAt(x: number): number {
+    return this.#shore[clampInt(x, 0, this.#shore.length - 1)] ?? 0;
+  }
 
   /** Rebuilds the cached layers when the pond's size or look changes. */
   layout(width: number, height: number, focusBottom: number, env: Environment) {

@@ -4,12 +4,18 @@
 import { layoutSeed, resolveSeason, resolveTime, resolveWeather, type PondConfig, type View } from "./config.ts";
 import { newPond, resizePond, stepPond, syncKoi, type Pond } from "./koi.ts";
 import { PondPainter, SHORE_ROWS, STRIP_ROWS, type Environment } from "./scene.ts";
+import { TextPainter } from "./text.ts";
 import { fitSukui, newSukui, releaseAll, stepSukui, type Sukui, type SukuiEvent } from "./sukui.ts";
 
-export type World = { pond: Pond; painter: PondPainter; sukui: Sukui | null };
+export type World = { pond: Pond; painter: PondPainter; text: TextPainter; sukui: Sukui | null };
 
 export function createWorld(): World {
-  return { pond: newPond(80, STRIP_ROWS, SHORE_ROWS), painter: new PondPainter(), sukui: null };
+  return {
+    pond: newPond(80, STRIP_ROWS, SHORE_ROWS),
+    painter: new PondPainter(),
+    text: new TextPainter(),
+    sukui: null,
+  };
 }
 
 export function environmentFor(config: PondConfig, date: Date): Environment {

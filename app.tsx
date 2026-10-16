@@ -38,6 +38,7 @@ import {
   VARIETIES,
   VARIETY_INFO,
   type IdleView,
+  type Style,
   type KoiEntry,
   type LilyAmount,
   type PoiGrade,
@@ -47,7 +48,7 @@ import {
   type WeatherChoice,
 } from "./config.ts";
 import { addRipple, attend, breathAt, dropFood, portraitKoi, type BreathPhase } from "./koi.ts";
-import { drawKoiPortrait, PIXEL_SCALE, SHORE_ROWS, STRIP_ROWS, type Scrim } from "./scene.ts";
+import { drawKoiPortrait, PIXEL_SCALE, SHORE_ROWS, STRIP_ROWS, type Scrim, type View as Rows } from "./scene.ts";
 import { isAuto, tap, type Sukui, type SukuiEvent } from "./sukui.ts";
 import { advanceWorld, createWorld, environmentFor, type World } from "./world.ts";
 import { composerBorderColor, insertComposerSlot, squareComposerTop } from "./composer-dom.ts";
@@ -62,6 +63,8 @@ const PAGE_PATH = "pond";
 const SETTINGS_ACTION = "pond-settings";
 
 const FRAME_MS = 40;
+/** Text art moves at a slower, retro pace. */
+const TEXT_FRAME_MS = 80;
 /** Under reduced motion nothing moves; the pond only redraws for changes. */
 const STILL_FRAME_MS = 500;
 /** Hidden or off-screen ponds rest instead of swimming unseen. */
@@ -456,6 +459,9 @@ function usePondLoop(options: LoopOptions): Hud {
     let last = performance.now();
     let lastBreath: BreathPhase | null = null;
     let hudNow = EMPTY_HUD;
+    // Text art inks in the theme's text color, rechecked now and then for theme changes.
+    let ink = "#71717a";
+    let inkAt = -Infinity;
 
     const tick = () => {
       if (disposed) return;
@@ -525,24 +531,28 @@ function usePondLoop(options: LoopOptions): Hud {
         const look = water.look(now);
         scrim = { color: look.background, alpha: look.dark ? 0.4 : 0.55, start: rows - 12, full: rows };
       }
+      // Pixel art draws one canvas pixel per pond pixel; text art draws at device resolution.
+      const text = config.style === "text";
+      const scale = text ? Math.max(1, Math.round(PIXEL_SCALE * window.devicePixelRatio)) : 1;
+      if (text && now - inkAt >= 1_000) {
+        inkAt = now;
+        ink = getComputedStyle(showCanvas ? canvas : water!.canvas).color || ink;
+      }
+      const paint = (target: HTMLCanvasElement, part: Rows) => {
+        if (target.width !== width * scale) target.width = width * scale;
+        if (target.height !== part.rows * scale) target.height = part.rows * scale;
+        const ctx = target.getContext("2d");
+        if (!ctx) return;
+        if (text) world.text.paint(ctx, world.painter, world.pond, env, now, part, world.sukui, scale, ink);
+        else world.painter.paint(ctx, world.pond, env, now, part, world.sukui);
+      };
       if (showCanvas) {
-        if (canvas.width !== width) canvas.width = width;
-        if (canvas.height !== rows) canvas.height = rows;
         // Whole pond pixels, so the strip and the chat input line up exactly.
         canvas.style.width = `${width * PIXEL_SCALE}px`;
         canvas.style.height = `${rows * PIXEL_SCALE}px`;
-        const ctx = canvas.getContext("2d");
-        if (ctx) world.painter.paint(ctx, world.pond, env, now, { y0: 0, rows, scrim }, world.sukui);
+        paint(canvas, { y0: 0, rows, scrim });
       }
-      if (showWater && waterSize) {
-        const target = water.canvas;
-        if (target.width !== width) target.width = width;
-        if (target.height !== below) target.height = below;
-        const ctx = target.getContext("2d");
-        if (ctx) {
-          world.painter.paint(ctx, world.pond, env, now, { y0: rows, rows: below, scrim }, world.sukui);
-        }
-      }
+      if (showWater && waterSize) paint(water.canvas, { y0: rows, rows: below, scrim });
 
       const sukui = world.sukui;
       const next: Hud = {
@@ -556,7 +566,7 @@ function usePondLoop(options: LoopOptions): Hud {
         hudNow = next;
         setHud(next);
       }
-      const delay = reducedMotion ? STILL_FRAME_MS : FRAME_MS;
+      const delay = reducedMotion ? STILL_FRAME_MS : text ? TEXT_FRAME_MS : FRAME_MS;
       timer = setTimeout(tick, Math.max(0, delay - (performance.now() - now)));
     };
     tick();
@@ -581,10 +591,11 @@ function usePondControls(
   const toPond = (event: PointerEvent<HTMLElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
+    // The canvas is always laid out at PIXEL_SCALE CSS pixels per pond pixel.
     const rect = canvas.getBoundingClientRect();
     return {
-      x: ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width,
-      y: ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height,
+      x: (event.clientX - rect.left) / PIXEL_SCALE,
+      y: (event.clientY - rect.top) / PIXEL_SCALE,
     };
   };
   const play = (events: SukuiEvent[]) => {
@@ -1338,6 +1349,17 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
 
           {settingsTab === "display" ? (
           <Section title="Above the chat input" description="What a thread's pond shows, and when.">
+            <Row label="Look" hint="Pixel art, or quiet text art in your theme's text color.">
+              <Segmented<Style>
+                label="Look"
+                value={config.style ?? "pixel"}
+                onChange={(style) => update({ style })}
+                options={[
+                  { value: "pixel", label: "Pixel" },
+                  { value: "text", label: "Text" },
+                ]}
+              />
+            </Row>
             <Row label="While the agent works" hint="Catch koi with a paper poi, or just watch.">
               <Segmented<View>
                 label="While the agent works"

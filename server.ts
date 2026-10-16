@@ -7,6 +7,7 @@ import {
   MAX_KOI,
   NAME_MAX,
   POI_GRADES,
+  STYLES,
   POND_CHANNEL,
   SEASONS,
   TIMES,
@@ -69,6 +70,7 @@ export const pondSchema = z
     ambience: ambienceSchema,
     views: viewsSchema,
     poi: z.enum(POI_GRADES),
+    style: z.enum(STYLES).optional(),
   })
   .strict();
 
@@ -108,6 +110,7 @@ export function readPond(stored: unknown, now: number): PondConfig {
     ambience: part(ambienceSchema, { ...fallback.ambience, ...oldAmbience }, fallback.ambience),
     views: part(viewsSchema, old.views, fallback.views),
     poi: part(z.enum(POI_GRADES), old.poi, fallback.poi),
+    style: part(z.enum(STYLES), old.style, "pixel"),
   };
 }
 

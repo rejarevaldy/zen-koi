@@ -26,6 +26,20 @@ It has its own art and code.
   slips back into the pond. After 15 seconds without a tap the poi scoops by
   itself again, so you can just watch.
 
+## Pixel or text
+
+Settings → Display → **Look** switches the pond between pixel art and quiet
+text art in your theme's own text color, with no other colors. In text art
+each character cell holds 2×4 pond pixels:
+
+- koi, the poi, and ripples are inked boldly: lone pixels as braille dots,
+  shapes as quadrant blocks (`▘ ▀ ▙ █`), fainter for a koi swimming deep
+- the tree and lily pads are a faint dotted texture
+- open water carries slow ASCII waves (`~ ≈`), the bank a few marks (`' , "`)
+
+Blocks and dots are drawn as shapes, so they look the same with any font. Text
+art redraws at a calmer 12.5 frames a second.
+
 ## The garden and the weather
 
 - A shoreline of grass and mossy stones, water that deepens away from the bank,
@@ -89,6 +103,7 @@ bb plugin dev     # rebuild and reload on save
 | `koi.ts`            | The simulation: koi, food, ripples, rain, falling petals   |
 | `sukui.ts`          | Koi-sukui: the poi, the paper, the bowl, and auto play     |
 | `scene.ts`          | The pixel-art painter, one pond world per set of canvases  |
+| `text.ts`           | The text-art look: ASCII, quadrant blocks, braille dots    |
 | `world.ts`          | Ties the config, simulation, painter, and poi together     |
 | `composer-water.ts` | The pond's continuation behind the chat input              |
 | `sound.ts`          | The soundscape, made with Web Audio                        |

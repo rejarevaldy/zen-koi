@@ -59,6 +59,10 @@ export type View = (typeof VIEWS)[number];
 export const IDLE_VIEWS = ["pond", "hidden"] as const;
 export type IdleView = (typeof IDLE_VIEWS)[number];
 
+/** How the pond is drawn: pixel art, or text art (ASCII, blocks, and braille dots). */
+export const STYLES = ["pixel", "text"] as const;
+export type Style = (typeof STYLES)[number];
+
 /** Poi paper, numbered like a festival stall's: higher is thinner. */
 export const POI_GRADES = ["4", "5", "6"] as const;
 export type PoiGrade = (typeof POI_GRADES)[number];
@@ -77,6 +81,8 @@ export type PondConfig = {
   /** What the strip shows while the agent works, and when it is idle. */
   views: { working: View; idle: IdleView };
   poi: PoiGrade;
+  /** Missing in ponds saved before 0.5, which are pixel art. */
+  style?: Style;
 };
 
 const DAY_MS = 86_400_000;
