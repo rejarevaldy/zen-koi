@@ -110,6 +110,12 @@ export function koiLength(addedAt: number, now: number): number {
   return 9 + Math.min(5, Math.floor(days / 2.8));
 }
 
+/** Size shown to the player: 15 cm when new, 45 cm after two weeks, a little more each day. */
+export function koiCm(addedAt: number, now: number): number {
+  const days = Math.max(0, (now - addedAt) / DAY_MS);
+  return Math.round(15 + 30 * Math.min(1, days / 14));
+}
+
 export function ageLabel(addedAt: number, now: number): string {
   const days = Math.floor(Math.max(0, now - addedAt) / DAY_MS);
   if (days === 0) return "New today";

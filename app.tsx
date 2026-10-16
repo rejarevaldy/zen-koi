@@ -23,6 +23,7 @@ import type { PluginRpcResult, PluginThreadPanelProps } from "@get-bb/plugin-sdk
 import type { rpcContract } from "./server.ts";
 import {
   ageLabel,
+  koiCm,
   defaultConfig,
   koiLength,
   MAX_KOI,
@@ -340,6 +341,11 @@ function koiName(config: PondConfig, id: string): string {
   return config.koi.find((entry) => entry.id === id)?.name ?? "a koi";
 }
 
+function caughtText(config: PondConfig, id: string): string {
+  const entry = config.koi.find((koi) => koi.id === id);
+  return entry ? `Caught ${entry.name} · ${koiCm(entry.addedAt, Date.now())} cm` : "Caught a koi";
+}
+
 /** Plays each event's sound and returns the news worth a moment in the status line. */
 function playEvents(
   events: readonly SukuiEvent[],
@@ -359,7 +365,7 @@ function playEvents(
       case "scooped":
         ambience.splash();
         onScoop(event.koiId);
-        news = { text: `Caught ${koiName(config, event.koiId)}`, until };
+        news = { text: caughtText(config, event.koiId), until };
         break;
       case "missed":
         news = { text: "Swam away", until };
@@ -1130,7 +1136,7 @@ function KoiCard({
           className="w-full rounded bg-transparent px-1 text-sm text-foreground outline-none hover:bg-muted focus:bg-muted"
         />
         <div className="truncate px-1 text-[11px] text-muted-foreground">
-          {VARIETY_INFO[entry.variety].name} · {ageLabel(entry.addedAt, now)}
+          {VARIETY_INFO[entry.variety].name} · {koiCm(entry.addedAt, now)} cm · {ageLabel(entry.addedAt, now)}
           {scoops > 0 ? ` · scooped ${scoops}×` : ""}
         </div>
       </div>
@@ -1303,7 +1309,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
           {settingsTab === "koi" ? (
           <Section
             title="Your koi"
-            description="Koi grow over their first two weeks. Released koi swim off for good."
+            description="Koi grow from 15 to 45 cm over their first two weeks. Released koi swim off for good."
             className="col-span-full"
           >
             <ul className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-2">

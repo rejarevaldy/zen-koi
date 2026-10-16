@@ -97,9 +97,10 @@ export function newSukui(grade: PoiGrade, pond: Pond, maxY: number): Sukui {
 export function fitSukui(sukui: Sukui, pond: Pond, maxY: number) {
   sukui.minY = pond.top + 3;
   sukui.maxY = Math.max(sukui.minY + 2, maxY - 3);
-  sukui.bowlX = pond.width - 12;
+  // The bowl floats on the left, clear of the controls at the right.
+  sukui.bowlX = 12;
   sukui.bowlY = Math.max(sukui.minY + 4, sukui.maxY - 4);
-  sukui.tx = clamp(sukui.tx, 6, Math.max(6, pond.width - 24));
+  sukui.tx = clamp(sukui.tx, 24, Math.max(24, pond.width - 6));
   sukui.ty = clamp(sukui.ty, sukui.minY, sukui.maxY);
 }
 
@@ -203,8 +204,8 @@ function releaseOne(sukui: Sukui, pond: Pond, rng: () => number, events: SukuiEv
   if (koi) {
     koi.away = false;
     // Slipped back over the bowl's rim, heading for open water.
-    const heading = Math.PI + (rng() - 0.5) * 1.2;
-    placeKoi(koi, sukui.bowlX - 8, sukui.bowlY + (rng() - 0.5) * 4, heading);
+    const heading = (rng() - 0.5) * 1.2;
+    placeKoi(koi, sukui.bowlX + 8, sukui.bowlY + (rng() - 0.5) * 4, heading);
     koi.depth = 0.1;
     koi.targetDepth = 0.4;
     addRipple(pond, koi.x, koi.y, 6, 6);
@@ -352,6 +353,6 @@ function pickSpot(sukui: Sukui, pond: Pond, rng: () => number) {
   const near = swimming[Math.floor(rng() * swimming.length)];
   const x = near ? near.x + (rng() - 0.5) * 30 : rng() * pond.width;
   const y = near ? near.y + (rng() - 0.5) * 8 : (sukui.minY + sukui.maxY) / 2;
-  sukui.tx = clamp(x, 8, Math.max(8, pond.width - 26));
+  sukui.tx = clamp(x, 26, Math.max(26, pond.width - 8));
   sukui.ty = clamp(y, sukui.minY, sukui.maxY);
 }
