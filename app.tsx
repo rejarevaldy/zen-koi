@@ -19,7 +19,7 @@ import {
   useRealtimeConnectionState,
   useRpc,
 } from "@get-bb/plugin-sdk/app";
-import type { PluginRpcResult } from "@get-bb/plugin-sdk/app";
+import type { PluginRpcResult, PluginThreadPanelProps } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server.ts";
 import {
   ageLabel,
@@ -58,8 +58,8 @@ type PondState = PluginRpcResult<(typeof rpcContract)["getPond"]>;
 // Declared in package.json under bb.branding.experimental_icons.
 const KOI_ICON = "zen-koi/koi";
 const SOUND_ICON = "zen-koi/sound";
-const EXPAND_ICON = "zen-koi/expand";
 const PAGE_PATH = "pond";
+const SETTINGS_ACTION = "pond-settings";
 
 const FRAME_MS = 33;
 /** Under reduced motion nothing moves; the pond only redraws for changes. */
@@ -83,7 +83,6 @@ const BREATH_LABEL: Record<BreathPhase, string> = {
   out: "Breathe out",
 };
 
-const VIEW_LABEL: Record<View, string> = { pond: "Pond", catch: "Catch" };
 
 const KOI_NAMES = [
   "Hana", "Sora", "Kin", "Kage", "Yuki", "Momo", "Aki", "Ume", "Tora", "Mizu",
@@ -232,6 +231,24 @@ ambience.configure(soundPrefs.enabled, soundPrefs.volume);
 type Session = { scooped: string[]; ended: boolean; dismissed: boolean };
 const sessions = new Map<string, Session>();
 const sessionListeners = new Set<() => void>();
+const viewOverrides = new Map<string, View>();
+const viewListeners = new Set<() => void>();
+
+function setViewOverride(threadId: string, view: View | null) {
+  if (view === null) viewOverrides.delete(threadId);
+  else viewOverrides.set(threadId, view);
+  for (const listener of viewListeners) listener();
+}
+
+function useViewOverride(threadId: string): View | null {
+  return useSyncExternalStore(
+    (listener) => {
+      viewListeners.add(listener);
+      return () => viewListeners.delete(listener);
+    },
+    () => viewOverrides.get(threadId) ?? null,
+  );
+}
 
 function setSession(threadId: string, session: Session) {
   sessions.set(threadId, session);
@@ -649,31 +666,6 @@ function Glass({ children, className = "" }: { children: ReactNode; className?: 
   );
 }
 
-function ViewSwitch({ view, onChange }: { view: View; onChange: (view: View) => void }) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label="What the pond shows"
-      className="flex gap-0.5 rounded-lg bg-black/40 p-0.5 shadow-sm backdrop-blur-sm"
-    >
-      {(["pond", "catch"] as const).map((option) => (
-        <button
-          key={option}
-          type="button"
-          role="radio"
-          aria-checked={option === view}
-          onClick={() => onChange(option)}
-          className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${
-            option === view ? "bg-white/90 text-black" : "text-white/80 hover:text-white"
-          }`}
-        >
-          {VIEW_LABEL[option]}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function BreathGuide({
   phase,
   dotRef,
@@ -797,7 +789,7 @@ function ThreadPond({
   const session = useSession(threadId);
   const [hidden, setHidden] = useStoredFlag(`${pluginId}.hidden`);
   const [running, setRunning] = useState(isRunning);
-  const [override, setOverride] = useState<View | null>(null);
+  const override = useViewOverride(threadId);
   const world = useMemo(createWorld, []);
   const newsRef = useRef<News | null>(null);
 
@@ -813,7 +805,7 @@ function ThreadPond({
   // A new turn starts a fresh catch log; the end of one keeps it for the summary.
   // Each change of state also goes back to that state's own view.
   useEffect(() => {
-    setOverride(null);
+    setViewOverride(threadId, null);
     const current = sessions.get(threadId);
     if (running) {
       if (!current || current.ended) setSession(threadId, { scooped: [], ended: false, dismissed: false });
@@ -879,7 +871,7 @@ function ThreadPond({
     newsRef,
   });
   const controls = usePondControls(world, view ?? "pond", config, canvasRef, onScoop, newsRef);
-  const openPage = () => navigate.toPluginPanel(PAGE_PATH);
+  const openSettings = () => navigate.openThreadPanel({ actionId: SETTINGS_ACTION, title: "Zen Pond" });
   // In the slot, the pond and the chat input below it read as one box.
   const frame = slot ? "rounded-t-xl border-b-0" : "rounded-xl";
   const summary =
@@ -904,7 +896,7 @@ function ThreadPond({
         </span>
         <button
           type="button"
-          onClick={openPage}
+          onClick={openSettings}
           className="rounded px-2 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           Zen Pond
@@ -945,8 +937,10 @@ function ThreadPond({
         >
           <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
         </div>
-        <div className="absolute top-1.5 right-1.5 flex items-start gap-1.5">
-          <ViewSwitch view={view ?? "pond"} onChange={setOverride} />
+        <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
+          <div className="rounded-lg bg-black/40 shadow-sm backdrop-blur-sm">
+            <IconButton label="Open pond settings" icon="Settings2" onClick={openSettings} />
+          </div>
           <div className="flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-300 group-focus-within:opacity-100 group-hover:opacity-100">
             <IconButton
               label={sound.enabled ? "Mute the pond" : "Play the pond's sounds"}
@@ -954,7 +948,6 @@ function ThreadPond({
               pressed={sound.enabled}
               onClick={() => setSoundPrefs({ ...sound, enabled: !sound.enabled })}
             />
-            <IconButton label="Open the Zen Pond" icon={EXPAND_ICON} onClick={openPage} />
             <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
           </div>
         </div>
@@ -1242,11 +1235,18 @@ function AddKoi({ config, onAdd }: { config: PondConfig; onAdd: (entry: KoiEntry
   );
 }
 
-function ZenPondPage() {
+function ZenPondPage({ threadId }: { threadId?: string } = {}) {
   const reducedMotion = useReducedMotion();
   const { config, scoops, error, save, recordScoop } = usePondState();
   const sound = useSoundPrefs();
-  const [view, setView] = useState<View>("pond");
+  const [pageView, setPageView] = useState<View>("pond");
+  const session = useSession(threadId ?? "");
+  const override = useViewOverride(threadId ?? "");
+  const view = threadId ? override ?? (session && !session.ended ? config.views.working : "pond") : pageView;
+  const setView = (next: View) => {
+    if (threadId) setViewOverride(threadId, next);
+    else setPageView(next);
+  };
   const world = useMemo(createWorld, []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const breathDotRef = useRef<HTMLSpanElement | null>(null);
@@ -1519,6 +1519,14 @@ function ZenPondPage() {
   );
 }
 
+function ZenPondSettingsPanel({ threadId }: PluginThreadPanelProps) {
+  return <ZenPondPage threadId={threadId} />;
+}
+
+function ZenPondNavPage() {
+  return <ZenPondPage />;
+}
+
 export default definePluginApp((app) => {
   app.composer.customize({
     id: "pond",
@@ -1530,6 +1538,12 @@ export default definePluginApp((app) => {
     title: "Zen Pond",
     icon: KOI_ICON,
     path: PAGE_PATH,
-    component: ZenPondPage,
+    component: ZenPondNavPage,
+  });
+  app.slots.threadPanelAction({
+    id: SETTINGS_ACTION,
+    title: "Zen Pond",
+    icon: KOI_ICON,
+    component: ZenPondSettingsPanel,
   });
 });
