@@ -1349,7 +1349,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
 
           {settingsTab === "display" ? (
           <Section title="Above the chat input" description="What a thread's pond shows, and when.">
-            <Row label="Look" hint="Pixel art, or quiet text art in your theme's text color.">
+            <Row label="Look" hint="Pixel art, or quiet ASCII art in your theme's text color.">
               <Segmented<Style>
                 label="Look"
                 value={config.style ?? "pixel"}

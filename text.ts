@@ -1,13 +1,10 @@
-// The "Text" look: the same pond, drawn as monochrome text art in the theme's
-// own text color. Each character cell covers 2x4 pond pixels, exactly a
-// braille cell, and takes one of these forms, boldest first:
-// - what moves (koi, the poi, ripples) is inked where it differs from the
-//   still garden, fainter where it differs less: lone pixels as braille dots,
-//   pixels that touch as quadrant blocks
-// - the garden (lily pads, the tree) is a faint dotted texture
-// - open water gets slow ASCII waves (`~ ≈`), the bank a few marks (`' , "`)
-// Blocks and dots are drawn as shapes, not font glyphs, so they look the same
-// on every font; only the ASCII is real text.
+// The "Text" look: the same pond as monochrome ASCII art in the theme's own
+// text color. Each character cell covers 2x4 pond pixels:
+// - what moves (koi, the poi, the bowl, ripples) is inked where it differs from
+//   the still garden, with a denser character the more of the cell it fills
+//   (`. : - = + * # @`)
+// - the garden (lily pads, the tree) is a lighter `.` and `:`
+// - open water carries slow waves (`~ -`), the bank a few marks (`. , '`)
 
 import { hash, noise, type Environment, type PondPainter, type View } from "./scene.ts";
 import type { Pond } from "./koi.ts";
@@ -16,37 +13,22 @@ import type { Sukui } from "./sukui.ts";
 export const CELL_W = 2;
 export const CELL_H = 4;
 /** A pixel this far (summed channels) from the still pond is inked. */
-const INK_FROM = 70;
-/** Ink strengths, faint to full; a cell takes the nearest one. */
-const LEVELS = [0.3, 0.45, 0.6, 0.75, 0.9] as const;
-const GARDEN_INK = 0.2;
-/** Pixels whose row and column add up to an even number. */
-const CHECKER = 0b1001_1001;
-const WAVE_INK = 0.22;
-const MARK_INK = 0.3;
+const INK_FROM = 60;
+/** By how many of a cell's eight pixels are inked: 1 to 8. */
+export const RAMP = ".:-=+*#@";
+const GARDEN = ".:";
+const WAVES = "~-";
+const MARKS = ".,'";
+/** Ink for each layer, boldest first. */
+const BOLD_INK = 0.95;
+const GARDEN_INK = 0.5;
+const WATER_INK = 0.4;
 /** Under the chat input's text the ink is lighter, so the text stays easy to read. */
-const UNDER_TEXT = 0.45;
+const UNDER_TEXT = 0.5;
 
-export type Shape =
-  | { kind: "plain" }
-  | { kind: "dots"; mask: number }
-  | { kind: "blocks"; quads: number };
-
-/**
- * The shape for a cell's inked pixels, given as a mask of eight bits, row by
- * row, two a row: dots when no inked pixel touches another, else blocks.
- */
-export function shapeOf(mask: number): Shape {
-  if (mask === 0) return { kind: "plain" };
-  // Touching: an inked pixel with an inked neighbor to its right or below.
-  const touching = (mask & (mask >> 1) & 0b0101_0101) !== 0 || (mask & (mask >> 2)) !== 0;
-  if (!touching) return { kind: "dots", mask };
-  // Quadrants: top-left, top-right, bottom-left, bottom-right, each two pixel rows.
-  let quads = 0;
-  for (let i = 0; i < 8; i++) {
-    if (mask & (1 << i)) quads |= 1 << ((i >> 2) * 2 + (i & 1));
-  }
-  return { kind: "blocks", quads };
+/** The character for a cell with `inked` of its eight pixels inked (0 is blank). */
+export function rampChar(inked: number): string {
+  return inked <= 0 ? " " : RAMP[Math.min(RAMP.length, inked) - 1]!;
 }
 
 function difference(data: Uint8ClampedArray, still: Uint8ClampedArray, at: number, stillAt: number): number {
@@ -57,19 +39,19 @@ function difference(data: Uint8ClampedArray, still: Uint8ClampedArray, at: numbe
   );
 }
 
+type Layer = { ink: number; cells: (number | string)[] };
+
 export class TextPainter {
   #pixels: HTMLCanvasElement | null = null;
   #stillSource: HTMLCanvasElement | null = null;
   /** The bare pond, and the pond with its garden, read once per layout. */
   #still: { bare: ImageData; garden: ImageData } | null = null;
-  /** Per ink level: cell column, line, and bits (blocks, or dots with bit 8 set). */
-  #levels: number[][] = LEVELS.map(() => []);
-  #garden: number[] = [];
-  #waves: number[] = [];
-  #marks: number[] = [];
+  #bold: Layer = { ink: BOLD_INK, cells: [] };
+  #garden: Layer = { ink: GARDEN_INK, cells: [] };
+  #water: Layer = { ink: WATER_INK, cells: [] };
 
   /**
-   * Paints the rows of `view` into `ctx` as text art in `ink`. `scale` is device
+   * Paints the rows of `view` into `ctx` as ASCII art in `ink`. `scale` is device
    * pixels per pond pixel; the target canvas is `painter.width * scale` wide.
    */
   paint(
@@ -86,69 +68,46 @@ export class TextPainter {
     const width = painter.width;
     const rows = view.rows;
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    if (width <= 0 || rows <= 0) return;
+    const still = this.#stillData(painter);
+    if (width <= 0 || rows <= 0 || !still) return;
     const pixelsCtx = this.#pixelContext(width, rows);
     // No wash here: it is applied as lighter ink instead.
     painter.paint(pixelsCtx, pond, env, now, { ...view, scrim: null }, sukui);
     const data = pixelsCtx.getImageData(0, 0, width, rows).data;
+    const { bare, garden } = still;
 
+    const bold = this.#bold.cells;
+    const leaves = this.#garden.cells;
+    const water = this.#water.cells;
+    bold.length = 0;
+    leaves.length = 0;
+    water.length = 0;
     const columns = Math.ceil(width / CELL_W);
     const lines = Math.ceil(rows / CELL_H);
-    const levels = this.#levels;
-    for (const list of levels) list.length = 0;
-    const garden = this.#garden;
-    const waves = this.#waves;
-    const marks = this.#marks;
-    garden.length = 0;
-    waves.length = 0;
-    marks.length = 0;
-    const { bare, garden: still } = this.#stillData(painter) ?? {};
-    if (!bare || !still) return;
     const t = now / 1000;
 
     for (let line = 0; line < lines; line++) {
       for (let column = 0; column < columns; column++) {
-        let mask = 0;
-        let gardenMask = 0;
-        let total = 0;
         let inked = 0;
+        let planted = 0;
         for (let i = 0; i < 8; i++) {
           const x = Math.min(width - 1, column * CELL_W + (i & 1));
           const y = Math.min(rows - 1, line * CELL_H + (i >> 1));
-          const stillAt = (Math.min(still.height - 1, view.y0 + y) * still.width + x) * 4;
-          const diff = difference(data, still.data, (y * width + x) * 4, stillAt);
-          if (diff > INK_FROM) {
-            mask |= 1 << i;
-            total += diff;
-            inked++;
-          } else if (difference(still.data, bare.data, stillAt, stillAt) > INK_FROM) {
-            gardenMask |= 1 << i;
-          }
+          const stillAt = (Math.min(garden.height - 1, view.y0 + y) * garden.width + x) * 4;
+          if (difference(data, garden.data, (y * width + x) * 4, stillAt) > INK_FROM) inked++;
+          else if (difference(garden.data, bare.data, stillAt, stillAt) > INK_FROM) planted++;
         }
-        const shape = shapeOf(mask);
-        if (shape.kind === "plain" && gardenMask) {
-          // Every other pixel, in a checker, so the garden reads as a soft texture.
-          // Cells are an even size, so one mask tiles the whole pond.
-          const dots = gardenMask & CHECKER;
-          if (dots) garden.push(column, line, dots | 256);
-          continue;
+        if (inked > 0) {
+          bold.push(column, line, rampChar(inked));
+        } else if (planted > 0) {
+          leaves.push(column, line, GARDEN[planted >= 4 ? 1 : 0]!);
+        } else if (view.y0 + line * CELL_H > painter.shoreAt(column * CELL_W) + 1) {
+          const wave = noise(77, column * 0.16 + t * 0.07, line * 0.55 - t * 0.025);
+          if (wave > 0.6) water.push(column, line, WAVES[wave > 0.7 ? 0 : 1]!);
+        } else {
+          const mark = hash(31, column, line + view.y0);
+          if (mark > 0.8) water.push(column, line, MARKS[Math.floor(mark * 300) % MARKS.length]!);
         }
-        if (shape.kind === "plain") {
-          const px = column * CELL_W;
-          const py = view.y0 + line * CELL_H;
-          if (py > painter.shoreAt(px) + 1) {
-            const wave = noise(77, column * 0.16 + t * 0.07, line * 0.55 - t * 0.025);
-            if (wave > 0.62) waves.push(column, line, wave > 0.72 ? 1 : 0);
-          } else {
-            const mark = hash(31, column, line + view.y0);
-            if (mark > 0.85) marks.push(column, line, 2 + (Math.floor(mark * 300) % 3));
-          }
-          continue;
-        }
-        // Stronger differences (a koi near the surface) ink darker than faint ones (a deep koi).
-        const strength = Math.min(1, total / inked / 260);
-        const level = Math.min(LEVELS.length - 1, Math.floor(strength * LEVELS.length));
-        levels[level]!.push(column, line, shape.kind === "dots" ? shape.mask | 256 : shape.quads);
       }
     }
 
@@ -156,37 +115,14 @@ export class TextPainter {
     const ch = CELL_H * scale;
     const soften = view.scrim ? UNDER_TEXT : 1;
     ctx.fillStyle = ink;
-    const dot = Math.max(1, Math.round(scale * 0.55));
-    const inset = (scale - dot) / 2;
-    [garden, ...levels].forEach((list, index) => {
-      ctx.globalAlpha = (index === 0 ? GARDEN_INK : LEVELS[index - 1]!) * soften;
-      for (let k = 0; k < list.length; k += 3) {
-        const x = list[k]! * cw;
-        const y = list[k + 1]! * ch;
-        const bits = list[k + 2]!;
-        if (bits & 256) {
-          // Braille: one small dot for each lone pixel.
-          for (let i = 0; i < 8; i++) {
-            if (bits & (1 << i)) ctx.fillRect(x + (i & 1) * scale + inset, y + (i >> 1) * scale + inset, dot, dot);
-          }
-        } else {
-          for (let q = 0; q < 4; q++) {
-            if (bits & (1 << q)) ctx.fillRect(x + (q & 1) * scale, y + (q >> 1) * 2 * scale, scale, 2 * scale);
-          }
-        }
-      }
-    });
-
-    ctx.font = `${Math.round(ch / 1.25)}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+    ctx.font = `600 ${Math.round(ch * 0.85)}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    for (const [list, alpha] of [
-      [waves, WAVE_INK],
-      [marks, MARK_INK],
-    ] as const) {
-      ctx.globalAlpha = alpha * soften;
-      for (let k = 0; k < list.length; k += 3) {
-        ctx.fillText(GLYPHS[list[k + 2]!]!, list[k]! * cw + cw / 2, list[k + 1]! * ch + ch / 2);
+    for (const layer of [this.#water, this.#garden, this.#bold]) {
+      ctx.globalAlpha = layer.ink * soften;
+      const cells = layer.cells;
+      for (let k = 0; k < cells.length; k += 3) {
+        ctx.fillText(cells[k + 2] as string, (cells[k] as number) * cw + cw / 2, (cells[k + 1] as number) * ch + ch / 2);
       }
     }
     ctx.globalAlpha = 1;
@@ -219,5 +155,3 @@ export class TextPainter {
     return canvas.getContext("2d", { willReadFrequently: true })!;
   }
 }
-
-const GLYPHS = ["~", "≈", "'", ",", '"'];
