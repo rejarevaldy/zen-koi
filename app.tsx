@@ -38,7 +38,6 @@ import {
   VARIETIES,
   VARIETY_INFO,
   type IdleView,
-  type Style,
   type KoiEntry,
   type LilyAmount,
   type PoiGrade,
@@ -48,7 +47,7 @@ import {
   type WeatherChoice,
 } from "./config.ts";
 import { addRipple, attend, breathAt, dropFood, portraitKoi, type BreathPhase } from "./koi.ts";
-import { drawKoiPortrait, PIXEL_SCALE, SHORE_ROWS, STRIP_ROWS, type Scrim, type View as Rows } from "./scene.ts";
+import { drawKoiPortrait, PIXEL_SCALE, SHORE_ROWS, STRIP_ROWS, type Scrim } from "./scene.ts";
 import { isAuto, tap, type Sukui, type SukuiEvent } from "./sukui.ts";
 import { advanceWorld, createWorld, environmentFor, type World } from "./world.ts";
 import { composerBorderColor, insertComposerSlot, squareComposerTop } from "./composer-dom.ts";
@@ -63,8 +62,6 @@ const PAGE_PATH = "pond";
 const SETTINGS_ACTION = "pond-settings";
 
 const FRAME_MS = 40;
-/** Text art moves at a slower, retro pace. */
-const TEXT_FRAME_MS = 80;
 /** Under reduced motion nothing moves; the pond only redraws for changes. */
 const STILL_FRAME_MS = 500;
 /** Hidden or off-screen ponds rest instead of swimming unseen. */
@@ -459,9 +456,6 @@ function usePondLoop(options: LoopOptions): Hud {
     let last = performance.now();
     let lastBreath: BreathPhase | null = null;
     let hudNow = EMPTY_HUD;
-    // Text art inks in the theme's text color, rechecked now and then for theme changes.
-    let ink = "#71717a";
-    let inkAt = -Infinity;
 
     const tick = () => {
       if (disposed) return;
@@ -531,28 +525,24 @@ function usePondLoop(options: LoopOptions): Hud {
         const look = water.look(now);
         scrim = { color: look.background, alpha: look.dark ? 0.4 : 0.55, start: rows - 12, full: rows };
       }
-      // Pixel art draws one canvas pixel per pond pixel; text art draws at device resolution.
-      const text = config.style === "text";
-      const scale = text ? Math.max(1, Math.round(PIXEL_SCALE * window.devicePixelRatio)) : 1;
-      if (text && now - inkAt >= 1_000) {
-        inkAt = now;
-        ink = getComputedStyle(showCanvas ? canvas : water!.canvas).color || ink;
-      }
-      const paint = (target: HTMLCanvasElement, part: Rows) => {
-        if (target.width !== width * scale) target.width = width * scale;
-        if (target.height !== part.rows * scale) target.height = part.rows * scale;
-        const ctx = target.getContext("2d");
-        if (!ctx) return;
-        if (text) world.text.paint(ctx, world.painter, world.pond, now, part, world.sukui, scale, ink);
-        else world.painter.paint(ctx, world.pond, env, now, part, world.sukui);
-      };
       if (showCanvas) {
+        if (canvas.width !== width) canvas.width = width;
+        if (canvas.height !== rows) canvas.height = rows;
         // Whole pond pixels, so the strip and the chat input line up exactly.
         canvas.style.width = `${width * PIXEL_SCALE}px`;
         canvas.style.height = `${rows * PIXEL_SCALE}px`;
-        paint(canvas, { y0: 0, rows, scrim });
+        const ctx = canvas.getContext("2d");
+        if (ctx) world.painter.paint(ctx, world.pond, env, now, { y0: 0, rows, scrim }, world.sukui);
       }
-      if (showWater && waterSize) paint(water.canvas, { y0: rows, rows: below, scrim });
+      if (showWater && waterSize) {
+        const target = water.canvas;
+        if (target.width !== width) target.width = width;
+        if (target.height !== below) target.height = below;
+        const ctx = target.getContext("2d");
+        if (ctx) {
+          world.painter.paint(ctx, world.pond, env, now, { y0: rows, rows: below, scrim }, world.sukui);
+        }
+      }
 
       const sukui = world.sukui;
       const next: Hud = {
@@ -566,7 +556,7 @@ function usePondLoop(options: LoopOptions): Hud {
         hudNow = next;
         setHud(next);
       }
-      const delay = reducedMotion ? STILL_FRAME_MS : text ? TEXT_FRAME_MS : FRAME_MS;
+      const delay = reducedMotion ? STILL_FRAME_MS : FRAME_MS;
       timer = setTimeout(tick, Math.max(0, delay - (performance.now() - now)));
     };
     tick();
@@ -591,11 +581,10 @@ function usePondControls(
   const toPond = (event: PointerEvent<HTMLElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
-    // The canvas is always laid out at PIXEL_SCALE CSS pixels per pond pixel.
     const rect = canvas.getBoundingClientRect();
     return {
-      x: (event.clientX - rect.left) / PIXEL_SCALE,
-      y: (event.clientY - rect.top) / PIXEL_SCALE,
+      x: ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width,
+      y: ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height,
     };
   };
   const play = (events: SukuiEvent[]) => {
@@ -663,6 +652,36 @@ function IconButton({
     >
       <Icon name={icon} className="size-3.5" aria-hidden />
     </button>
+  );
+}
+
+/**
+ * A pond's few controls at its top right: Catch or Watch, then any others.
+ * Shown while that corner is hovered or the pond has keyboard focus (always,
+ * on touch screens), in a group inside a `group` element.
+ */
+function CornerControls({
+  view,
+  onView,
+  children,
+}: {
+  view: View;
+  onView: (view: View) => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="group/bar absolute top-1.5 right-1.5">
+      <div className="pointer-events-none flex items-center gap-0.5 rounded-lg bg-black/25 p-0.5 text-[11px] opacity-0 backdrop-blur-sm transition-opacity duration-300 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover/bar:pointer-events-auto group-hover/bar:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
+        <button
+          type="button"
+          onClick={() => onView(view === "catch" ? "pond" : "catch")}
+          className="rounded-md px-2 py-1 text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+        >
+          {view === "catch" ? "Watch" : "Catch"}
+        </button>
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -945,21 +964,10 @@ function ThreadPond({
         >
           <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
         </div>
-        {/* Controls at the top right, shown while that corner is hovered or the pond has keyboard focus
-            (always, on touch screens). */}
-        <div className="group/bar absolute top-1.5 right-1.5">
-          <div className="pointer-events-none flex items-center gap-0.5 rounded-lg bg-black/25 p-0.5 text-[11px] opacity-0 backdrop-blur-sm transition-opacity duration-300 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover/bar:pointer-events-auto group-hover/bar:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
-            <button
-              type="button"
-              onClick={() => setViewOverride(threadId, view === "catch" ? "pond" : "catch")}
-              className="rounded-md px-2 py-1 text-white/80 transition-colors hover:bg-white/15 hover:text-white"
-            >
-              {view === "catch" ? "Watch" : "Catch"}
-            </button>
-            <IconButton label="Open pond settings" icon="Settings" onClick={openSettings} />
-            <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
-          </div>
-        </div>
+        <CornerControls view={view} onView={(next) => setViewOverride(threadId, next)}>
+          <IconButton label="Open pond settings" icon="Settings" onClick={openSettings} />
+          <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
+        </CornerControls>
         <div className="pointer-events-none absolute right-1.5 bottom-1.5 left-1.5 flex items-end justify-between gap-2">
           {hud.breath ? <BreathGuide phase={hud.breath} dotRef={breathDotRef} /> : null}
           <div className="ml-auto flex min-w-0 justify-end">
@@ -1262,17 +1270,6 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
               {config.koi.length === 1 ? "1 koi" : `${config.koi.length} koi`}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Segmented<View>
-              label="What the pond shows"
-              value={view}
-              onChange={setView}
-              options={[
-                { value: "pond", label: "Pond" },
-                { value: "catch", label: "Catch" },
-              ]}
-            />
-          </div>
         </header>
         {error ? <p className="text-xs text-destructive">Could not save the pond: {error}</p> : null}
         <div role="group" aria-label="Pond settings" className="sticky top-0 z-10 flex gap-1 overflow-x-auto rounded-lg bg-muted p-1">
@@ -1290,13 +1287,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
             </button>
           ))}
         </div>
-        {view === "catch" && settingsTab === "display" ? (
-          <p className="text-xs text-muted-foreground">
-            Tap the water, or press Space, when ! appears.
-          </p>
-        ) : null}
-
-        <div className="relative overflow-hidden rounded-xl border border-border bg-card">
+        <div className="group relative overflow-hidden rounded-xl border border-border bg-card">
           <div
             role="button"
             tabIndex={0}
@@ -1311,6 +1302,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
           >
             <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
           </div>
+          <CornerControls view={view} onView={setView} />
           <div className="pointer-events-none absolute right-2 bottom-2 left-2 flex items-end justify-between gap-2">
             {hud.breath ? <BreathGuide phase={hud.breath} dotRef={breathDotRef} /> : null}
             <div className="ml-auto flex min-w-0 justify-end">{view === "catch" ? <CatchHud hud={hud} grade={config.poi} /> : null}</div>
@@ -1321,7 +1313,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
           {settingsTab === "koi" ? (
           <Section
             title="Your koi"
-            description="Koi grow from 15 to 45 cm over their first two weeks. Released koi swim off for good."
+            description="Koi grow from 15 to 45 cm in two weeks."
             className="col-span-full"
           >
             <ul className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-2">
@@ -1348,19 +1340,8 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
           ) : null}
 
           {settingsTab === "display" ? (
-          <Section title="Above the chat input" description="What a thread's pond shows, and when.">
-            <Row label="Look" hint="Pixel art, or quiet ASCII art in your theme's text color.">
-              <Segmented<Style>
-                label="Look"
-                value={config.style ?? "pixel"}
-                onChange={(style) => update({ style })}
-                options={[
-                  { value: "pixel", label: "Pixel" },
-                  { value: "text", label: "Text" },
-                ]}
-              />
-            </Row>
-            <Row label="While the agent works" hint="Catch koi with a paper poi, or just watch.">
+          <Section title="Above the chat input">
+            <Row label="While the agent works">
               <Segmented<View>
                 label="While the agent works"
                 value={config.views.working}
@@ -1382,18 +1363,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
                 ]}
               />
             </Row>
-            <p className="text-[11px] text-muted-foreground">
-              The Pond and Catch switch above changes this thread's view until the agent starts or stops.
-            </p>
-          </Section>
-          ) : null}
-
-          {settingsTab === "display" ? (
-          <Section
-            title="Catching koi"
-            description="The scoop moves by itself; tap when ! appears over it."
-          >
-            <Row label="Poi paper" hint="Higher numbers are thinner, like at a real stall.">
+            <Row label="Poi paper">
               <Segmented<PoiGrade>
                 label="Poi paper"
                 value={config.poi}
@@ -1409,8 +1379,8 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
           ) : null}
 
           {settingsTab === "garden" ? (
-          <Section title="Garden" description="What grows around the water.">
-            <Row label="Pond layout" hint="Shoreline, stones, pads, and which side the tree stands on.">
+          <Section title="Garden">
+            <Row label="Pond layout">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -1428,16 +1398,16 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
                 onChange={(daily) => update({ layout: { ...config.layout, daily } })}
               />
             </Row>
-            <Row label="Stone lantern" hint="Lit from dusk to dawn, and in the rain.">
+            <Row label="Stone lantern">
               <Switch label="Stone lantern" checked={config.garden.lantern} onChange={(lantern) => garden({ lantern })} />
             </Row>
-            <Row label="Overhanging tree" hint="Sakura, summer green, maple red, or bare with snow.">
+            <Row label="Overhanging tree">
               <Switch label="Overhanging tree" checked={config.garden.tree} onChange={(tree) => garden({ tree })} />
             </Row>
             <Row label="Water plants">
               <Switch label="Water plants" checked={config.garden.plants} onChange={(plants) => garden({ plants })} />
             </Row>
-            <Row label="Lily pads" hint="Lotus flowers bloom in spring and summer.">
+            <Row label="Lily pads">
               <Segmented<LilyAmount>
                 label="Lily pads"
                 value={config.garden.lilies}
@@ -1453,7 +1423,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
           ) : null}
 
           {settingsTab === "ambience" ? (
-          <Section title="Ambience" description="Auto follows your calendar and clock, with rain now and then.">
+          <Section title="Ambience">
             <Row label="Season">
               <Segmented
                 label="Season"
@@ -1488,7 +1458,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
                 ]}
               />
             </Row>
-            <Row label="Sound" hint="Water, a wind chime, a shishi-odoshi. This device only.">
+            <Row label="Sound" hint="This device only.">
               <div className="flex items-center gap-2">
                 <input
                   type="range"
@@ -1509,7 +1479,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
                 />
               </div>
             </Row>
-            <Row label="Breathing guide" hint="In for 4, hold for 2, out for 6, in the pond view.">
+            <Row label="Breathing guide">
               <Switch
                 label="Breathing guide"
                 checked={config.ambience.breathing}

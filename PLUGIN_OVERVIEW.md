@@ -10,6 +10,4 @@ Switch to koi-sukui, the festival game of scooping fish with a paper poi, in one
 
 Open the Zen Pond page from the navigation rail to visit any time. Add, name, and release up to nine koi from ten varieties, and watch them grow over two weeks. Choose a stone lantern, an overhanging tree that changes with the seasons, lily pads, and water plants, and set the season, time of day, rain, sound, and a breathing guide.
 
-Prefer something quieter? Switch the look to ASCII art: a monochrome pond in your theme's text color.
-
 Sound is off until you turn it on: water, a wind chime, and a shishi-odoshi. The pond honors reduced-motion settings and never takes focus from the chat input.

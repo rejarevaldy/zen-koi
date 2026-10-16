@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { pondSchema, readPond } from "./server.ts";
+import { readPond } from "./server.ts";
 
 test("a pond saved by 0.2 keeps its koi, garden, and ambience", () => {
   const old = {
@@ -25,9 +25,11 @@ test("nothing stored, or something broken, gives the default pond", () => {
   assert.equal(readPond({ koi: "nope" }, 0).koi.length, 4);
 });
 
-test("a pond saved before the text look still validates as it is, and reads as pixel art", () => {
-  const saved = { ...readPond(undefined, Date.now()) };
-  delete saved.style;
-  assert.equal(pondSchema.safeParse(saved).success, true);
-  assert.equal(readPond({ koi: "broken" }, 0).style, "pixel");
+test("a pond saved with the retired text look keeps everything else", () => {
+  const saved = { ...readPond(undefined, Date.now()), style: "pixel" };
+  const pond = readPond(saved, Date.now());
+  assert.deepEqual(pond.koi, saved.koi);
+  assert.deepEqual(pond.garden, saved.garden);
+  assert.deepEqual(pond.layout, saved.layout);
+  assert.equal("style" in pond, false);
 });

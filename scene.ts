@@ -217,14 +217,14 @@ function bayer(x: number, y: number): number {
   return BAYER[y & 3]![x & 3]! / 16;
 }
 
-export function hash(seed: number, x: number, y: number): number {
+function hash(seed: number, x: number, y: number): number {
   let h = (seed * 374761393 + x * 668265263 + y * 1274126177) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
 /** Smooth value noise in [0, 1). */
-export function noise(seed: number, x: number, y: number): number {
+function noise(seed: number, x: number, y: number): number {
   const ix = Math.floor(x);
   const iy = Math.floor(y);
   const fx = x - ix;
@@ -452,7 +452,8 @@ export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle
     for (const key of pixels.keys()) ctx.fillRect(xOf(key) + ox, yOf(key) + oy, 1, 1);
   }
   // A koi has only a few colors: shade each once, then fill its pixels together.
-  const depth = koi.depth * 0.55;
+  // Kept clear: only a little water tint with depth, and little dimming at night.
+  const depth = koi.depth * 0.42;
   const groups = new Map<string, number[]>();
   for (const [key, pixel] of pixels) {
     const group = (pixel.fin ? "f" : "b") + pixel.color;
@@ -465,7 +466,7 @@ export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle
     const color = group.slice(1);
     let shade = fin ? mix(color, style.water, 0.4) : color;
     shade = mix(shade, style.water, depth);
-    if (style.dimAmount > 0) shade = mix(shade, style.dim, style.dimAmount * 0.6);
+    if (style.dimAmount > 0) shade = mix(shade, style.dim, style.dimAmount * 0.35);
     ctx.globalAlpha = fin ? 0.8 : 1;
     ctx.fillStyle = shade;
     for (const key of keys) ctx.fillRect(xOf(key), yOf(key), 1, 1);
@@ -532,11 +533,6 @@ export class PondPainter {
   #lightAt = -Infinity;
   /** Where the tree hangs over the water; petals fall from here. */
   canopy: Region | null = null;
-
-  /** The first water row below the bank at column `x`. */
-  shoreAt(x: number): number {
-    return this.#shore[clampInt(x, 0, this.#shore.length - 1)] ?? 0;
-  }
 
   /** Rebuilds the cached layers when the pond's size or look changes. */
   layout(width: number, height: number, focusBottom: number, env: Environment) {
@@ -694,7 +690,7 @@ export class PondPainter {
         let color = light.water[level]!;
         const grain = hash(this.#seed + 1, x, y);
         if (fromShore < 3 && grain > 0.8) color = mix(color, dimmed(SAND), 0.4);
-        else if (grain > 0.965) color = light.water[Math.max(0, level - 1)]!;
+        else if (grain > 0.99) color = light.water[Math.max(0, level - 1)]!;
         // The bank's shade on the water right below it.
         if (fromShore === 0) color = mix(color, light.shade, 0.4);
         else if (fromShore === 1) color = mix(color, light.shade, 0.16);
