@@ -313,20 +313,21 @@ type Hud = {
   breath: BreathPhase | null;
   /** What the poi is doing, in catch view. */
   status: string | null;
+  /** The status is a passing note (a catch, a miss), the only part shown on screen. */
+  news: boolean;
   /** Paper left, in tenths, or null outside catch view. */
   paper: number | null;
-  bite: boolean;
   inBowl: number;
 };
 
-const EMPTY_HUD: Hud = { breath: null, status: null, paper: null, bite: false, inBowl: 0 };
+const EMPTY_HUD: Hud = { breath: null, status: null, news: false, paper: null, inBowl: 0 };
 
 function sameHud(a: Hud, b: Hud): boolean {
   return (
     a.breath === b.breath &&
     a.status === b.status &&
     a.paper === b.paper &&
-    a.bite === b.bite &&
+    a.news === b.news &&
     a.inBowl === b.inBowl
   );
 }
@@ -542,7 +543,7 @@ function usePondLoop(options: LoopOptions): Hud {
         breath: breathing ? breath.phase : null,
         status: sukui ? catchStatus(sukui, newsRef.current, now) : null,
         paper: sukui ? Math.max(0, Math.ceil(sukui.paper * 10)) : null,
-        bite: sukui?.phase.kind === "bite",
+        news: !!newsRef.current && now < newsRef.current.until,
         inBowl: sukui?.bowl.length ?? 0,
       };
       if (!sameHud(next, hudNow)) {
@@ -679,13 +680,20 @@ function BreathGuide({
   );
 }
 
+/** Catch is told by the "!" in the water; only a passing note shows here. */
 function CatchHud({ hud, grade }: { hud: Hud; grade: PoiGrade }) {
   if (hud.status === null || hud.paper === null) return null;
   return (
-    <Glass className={`inline-flex max-w-full items-center whitespace-nowrap ${hud.bite ? "bg-amber-300/25 text-amber-50" : ""}`}>
-      <span className="sr-only">No.{grade} paper: {hud.paper * 10}% left.</span>
-      <span aria-live="polite">{hud.status}</span>
-    </Glass>
+    <>
+      <span className="sr-only" aria-live="polite">
+        {hud.status}. No.{grade} paper: {hud.paper * 10}% left.
+      </span>
+      {hud.news ? (
+        <Glass className="inline-flex max-w-full items-center whitespace-nowrap">
+          <span aria-hidden>{hud.status}</span>
+        </Glass>
+      ) : null}
+    </>
   );
 }
 
@@ -1266,7 +1274,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
         </div>
         {view === "catch" && settingsTab === "display" ? (
           <p className="text-xs text-muted-foreground">
-            The scoop moves by itself. Tap the water, or press Space, when a ! appears. Auto catch resumes after 15 seconds.
+            Tap the water, or press Space, when ! appears.
           </p>
         ) : null}
 

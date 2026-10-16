@@ -56,8 +56,9 @@ It has its own art and code.
   only on the page.
 
 Hover the strip's top-right corner (or focus the pond from the keyboard) for
-its few controls: Catch or Watch, settings, and hide. The catch status sits
-quietly at the bottom right. Sound lives in the settings panel. Clicking the pond never
+its few controls: Catch or Watch, settings, and hide. In Catch, the only
+text is a brief note after a catch or a miss. Sound lives in the settings
+panel. Clicking the pond never
 takes focus from the chat input. The pond honors reduced motion.
 
 ## Install
