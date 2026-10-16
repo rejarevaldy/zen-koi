@@ -9,8 +9,8 @@ import {
   newSukui,
   releaseAll,
   stepSukui,
+  TAKEOVER_MS,
   tap,
-  tapAt,
   type Sukui,
   type SukuiEvent,
 } from "./sukui.ts";
@@ -53,8 +53,8 @@ test("left alone, the poi plays by itself and scoops koi", () => {
 
 test("the player taps when a koi is over the poi, and scoops it", () => {
   const { pond, sukui, rng } = setup(2);
-  // Take the poi: it stops playing by itself and waits where it was tapped.
-  tapAt(sukui, pond, 100, 20, rng);
+  // Take the poi: it stops scooping by itself.
+  tap(sukui, pond, rng);
   assert.equal(isAuto(sukui), false);
   let bite: SukuiEvent | undefined;
   run(pond, sukui, rng, 120_000, (batch) => {
@@ -80,7 +80,7 @@ test("the player taps when a koi is over the poi, and scoops it", () => {
 
 test("waiting too long lets the koi swim off", () => {
   const { pond, sukui, rng } = setup(3);
-  tapAt(sukui, pond, 100, 20, rng);
+  tap(sukui, pond, rng);
   run(pond, sukui, rng, 120_000, (batch) => {
     sukui.playerMs = 0;
     return batch.some((event) => event.type === "bite");
@@ -97,7 +97,7 @@ test("waiting too long lets the koi swim off", () => {
 test("wet paper wears through, then a fresh poi comes", () => {
   const { pond, sukui, rng } = setup(4);
   sukui.grade = "6";
-  tapAt(sukui, pond, 100, 20, rng);
+  tap(sukui, pond, rng);
   // Koi are kept away, so the poi just soaks.
   for (const koi of pond.koi) koi.away = true;
   const events = run(pond, sukui, rng, 120_000, (batch) => {
@@ -121,4 +121,38 @@ test("stopping play lets every koi out of the bowl", () => {
   releaseAll(sukui, pond, rng);
   assert.equal(sukui.bowl.length, 0);
   assert.ok(pond.koi.every((koi) => !koi.away));
+});
+
+test("tapping before the ! startles the coming koi, and nothing is scooped", () => {
+  const { pond, sukui, rng } = setup(6);
+  tap(sukui, pond, rng);
+  run(pond, sukui, rng, 120_000, () => {
+    sukui.playerMs = 0;
+    return sukui.phase.kind === "waiting" && sukui.phase.caller !== null;
+  });
+  assert.equal(sukui.phase.kind, "waiting");
+  const events = tap(sukui, pond, rng);
+  assert.deepEqual(events, [{ type: "early" }]);
+  assert.equal(sukui.phase.kind === "waiting" && sukui.phase.caller, null);
+  assert.equal(sukui.bowl.length, 0);
+});
+
+test("in the player's hands the poi still moves by itself, and auto play returns after 15 s", () => {
+  const { pond, sukui, rng } = setup(7);
+  tap(sukui, pond, rng);
+  let dips = 0;
+  let scoops = 0;
+  run(pond, sukui, rng, 240_000, (batch) => {
+    sukui.playerMs = 0;
+    for (const event of batch) {
+      if (event.type === "dip") dips++;
+      if (event.type === "bite") scoops += tap(sukui, pond, rng).filter((e) => e.type === "scooped").length;
+    }
+    return scoops >= 2;
+  });
+  assert.equal(scoops, 2);
+  assert.ok(dips >= 2, "the poi moved on to new spots without being placed");
+  assert.equal(isAuto(sukui), false);
+  run(pond, sukui, rng, TAKEOVER_MS + 100);
+  assert.equal(isAuto(sukui), true);
 });

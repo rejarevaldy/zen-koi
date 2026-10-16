@@ -14,18 +14,17 @@ It has its own art and code.
 - **Watch.** Koi wander, rest, drift deeper and back up, keep each other
   company, and come over to look when your pointer rests on the water. Click
   to scatter a little food and the nearest koi come to eat it.
-- **Koi-sukui.** The festival game of scooping fish with a paper *poi*, played
-  gently. Hold to dip the poi and let go to lift it. The rules follow the real
-  game:
-  - a quick, splashy entry tears the paper, and wet paper weakens over time
-  - koi flee a poi swept through the water, but gather under a still one
-  - only koi near the surface can be lifted, and catching one on the rim
-    spares the paper
+- **Koi-sukui.** The festival game of scooping fish with a paper *poi*, cut
+  down to one timing tap so it fits a short wait. The poi moves and dips by
+  itself and koi gather under it. When one is right over the paper a **!**
+  shows: tap the water, or press Space or Enter, to scoop it. Tap too soon
+  and the koi darts off.
+  - wet paper weakens over time, and a big koi strains it until it tears
   - poi paper comes as No.4 (thick), No.5, or No.6 (thin)
 
   Every koi you scoop rests in a floating wooden bowl for a moment and then
-  slips back into the pond. Leave the poi alone for a few seconds and it plays
-  by itself, so you can just watch.
+  slips back into the pond. After 15 seconds without a tap the poi scoops by
+  itself again, so you can just watch.
 
 ## The garden and the weather
 
@@ -56,8 +55,9 @@ It has its own art and code.
 - **Above the chat input.** Show the pond while the agent works, always, or
   only on the page.
 
-The strip's controls appear when you hover it: switch between watching and
-koi-sukui, sound, open the page, and hide the pond. Clicking the pond never
+The strip keeps one small group at its top right: the catch status, plus
+Pond/Catch, settings, and hide, which appear on hover or keyboard focus. Sound
+lives in the settings panel. Clicking the pond never
 takes focus from the chat input. The pond honors reduced motion.
 
 ## Install

@@ -4,7 +4,7 @@ When an agent starts a turn, a pixel-art koi pond opens on top of the thread's c
 
 ## Koi-sukui
 
-Switch to koi-sukui, the festival game of scooping fish with a paper poi, played gently. Dip slowly and lift soon: a splashy entry tears the paper, koi flee a poi swept through the water, and only koi near the surface can be lifted. Every koi you scoop rests in a wooden bowl, then goes back. Leave the poi alone and it plays by itself.
+Switch to koi-sukui, the festival game of scooping fish with a paper poi, in one tap. The poi moves by itself; when a koi is right over it a ! shows, and you tap to scoop. Tap too soon and the koi darts off. Every koi you scoop rests in a wooden bowl, then goes back. Leave it for 15 seconds and the poi plays by itself.
 
 ## Your own pond
 

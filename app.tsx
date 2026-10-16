@@ -47,7 +47,7 @@ import {
 } from "./config.ts";
 import { addRipple, attend, breathAt, dropFood, portraitKoi, type BreathPhase } from "./koi.ts";
 import { drawKoiPortrait, PIXEL_SCALE, SHORE_ROWS, STRIP_ROWS, type Scrim } from "./scene.ts";
-import { isAuto, tap, tapAt, type Sukui, type SukuiEvent } from "./sukui.ts";
+import { isAuto, tap, type Sukui, type SukuiEvent } from "./sukui.ts";
 import { advanceWorld, createWorld, environmentFor, type World } from "./world.ts";
 import { composerBorderColor, insertComposerSlot, squareComposerTop } from "./composer-dom.ts";
 import { attachComposerWater, type ComposerWater } from "./composer-water.ts";
@@ -316,11 +316,10 @@ type Hud = {
   /** Paper left, in tenths, or null outside catch view. */
   paper: number | null;
   bite: boolean;
-  auto: boolean;
   inBowl: number;
 };
 
-const EMPTY_HUD: Hud = { breath: null, status: null, paper: null, bite: false, auto: false, inBowl: 0 };
+const EMPTY_HUD: Hud = { breath: null, status: null, paper: null, bite: false, inBowl: 0 };
 
 function sameHud(a: Hud, b: Hud): boolean {
   return (
@@ -328,12 +327,13 @@ function sameHud(a: Hud, b: Hud): boolean {
     a.status === b.status &&
     a.paper === b.paper &&
     a.bite === b.bite &&
-    a.auto === b.auto &&
     a.inBowl === b.inBowl
   );
 }
 
 type News = { text: string; until: number };
+
+const CATCH_HINT = "Koi pond. The poi moves by itself; tap, or press Space or Enter, when a ! shows over it to scoop.";
 
 function koiName(config: PondConfig, id: string): string {
   return config.koi.find((entry) => entry.id === id)?.name ?? "a koi";
@@ -363,6 +363,9 @@ function playEvents(
       case "missed":
         news = { text: "Koi swam away", until };
         break;
+      case "early":
+        news = { text: "Too soon, wait for !", until };
+        break;
       case "torn":
         ambience.tear();
         news = { text: "New scoop soon", until };
@@ -377,17 +380,9 @@ function playEvents(
 
 function catchStatus(sukui: Sukui, news: News | null, now: number): string {
   if (news && now < news.until) return news.text;
-  const auto = isAuto(sukui);
-  switch (sukui.phase.kind) {
-    case "bite":
-      return auto ? "Auto catch" : "Tap now!";
-    case "moving":
-      return auto ? "Auto catch" : "Moving scoop";
-    case "waiting":
-      return auto ? "Auto catch" : "Wait for koi";
-    case "cooldown":
-      return sukui.torn ? "New scoop soon" : auto ? "Auto catch" : "Wait for koi";
-  }
+  if (sukui.torn) return "New scoop soon";
+  if (sukui.phase.kind === "bite") return "Tap now!";
+  return isAuto(sukui) ? "Auto · tap at !" : "Wait for !";
 }
 
 type LoopOptions = {
@@ -548,7 +543,6 @@ function usePondLoop(options: LoopOptions): Hud {
         status: sukui ? catchStatus(sukui, newsRef.current, now) : null,
         paper: sukui ? Math.max(0, Math.ceil(sukui.paper * 10)) : null,
         bite: sukui?.phase.kind === "bite",
-        auto: sukui ? isAuto(sukui) : false,
         inBowl: sukui?.bowl.length ?? 0,
       };
       if (!sameHud(next, hudNow)) {
@@ -604,7 +598,7 @@ function usePondControls(
       const point = toPond(event);
       if (!point) return;
       if (view === "catch" && world.sukui) {
-        play(tapAt(world.sukui, world.pond, point.x, point.y, Math.random));
+        play(tap(world.sukui, world.pond, Math.random));
       } else {
         feed(point.x, point.y);
       }
@@ -688,10 +682,21 @@ function BreathGuide({
 function CatchHud({ hud, grade }: { hud: Hud; grade: PoiGrade }) {
   if (hud.status === null || hud.paper === null) return null;
   return (
-    <Glass className={`inline-flex max-w-full items-center whitespace-nowrap ${hud.bite && !hud.auto ? "bg-amber-500/80 text-black" : ""}`}>
+    <Glass className={`inline-flex max-w-full items-center whitespace-nowrap ${hud.bite ? "bg-amber-500/80 text-black" : ""}`}>
       <span className="sr-only">No.{grade} paper: {hud.paper * 10}% left.</span>
       <span aria-live="polite">{hud.status}</span>
     </Glass>
+  );
+}
+
+/** The poi's status inside the strip's control group; amber while a koi bites. */
+function CatchStatus({ hud, grade }: { hud: Hud; grade: PoiGrade }) {
+  if (hud.status === null || hud.paper === null) return null;
+  return (
+    <span className={`rounded-md px-1.5 py-0.5 whitespace-nowrap ${hud.bite ? "bg-amber-500/80 text-black" : ""}`}>
+      <span className="sr-only">No.{grade} paper: {hud.paper * 10}% left.</span>
+      <span aria-live="polite">{hud.status}</span>
+    </span>
   );
 }
 
@@ -712,10 +717,9 @@ function CatchSummary({
     .join(", ");
   const total = session.scooped.length;
   return (
-    <Glass className="pointer-events-auto flex items-center gap-2">
+    <span className="flex items-center gap-0.5 whitespace-nowrap pl-1.5" title={names}>
       <span>
-        While your agent worked: {total === 1 ? "1 koi" : `${total} koi`} scooped
-        <span className="opacity-70"> · {names}</span>
+        {total} caught<span className="sr-only"> while your agent worked: {names}</span>
       </span>
       <button
         type="button"
@@ -725,7 +729,7 @@ function CatchSummary({
       >
         ×
       </button>
-    </Glass>
+    </span>
   );
 }
 
@@ -916,7 +920,7 @@ function ThreadPond({
           tabIndex={0}
           aria-label={
             view === "catch"
-              ? "Koi pond. Tap the water to move the poi; tap when a koi is over it to scoop."
+              ? CATCH_HINT
               : "Koi pond. Click to scatter a little food."
           }
           className="block w-full cursor-pointer touch-none overflow-hidden outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
@@ -927,20 +931,44 @@ function ThreadPond({
         >
           <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
         </div>
-        <div className="pointer-events-none absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-300 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
-            <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
+        {/* One group: the catch status stays in view; the controls show on hover or keyboard focus. */}
+        <div
+          className={`absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5 text-[11px] text-white/90 shadow-sm backdrop-blur-sm transition-opacity duration-300 ${
+            view === "catch" || summary
+              ? ""
+              : "pointer-events-none opacity-0 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+          }`}
+        >
+          {view === "catch" ? (
+            <CatchStatus hud={hud} grade={config.poi} />
+          ) : summary ? (
+            <CatchSummary session={summary} config={config} onDismiss={dismissSummary} />
+          ) : null}
+          <div className="hidden items-center gap-0.5 group-focus-within:flex group-hover:flex">
+            <div role="group" aria-label="What the pond shows" className="flex items-center">
+              {(["pond", "catch"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  aria-pressed={view === option}
+                  onClick={() => setViewOverride(threadId, option)}
+                  className={`rounded-md px-1.5 py-1 transition-colors hover:bg-white/15 hover:text-white ${
+                    view === option ? "bg-white/15 text-white" : "text-white/70"
+                  }`}
+                >
+                  {option === "pond" ? "Pond" : "Catch"}
+                </button>
+              ))}
+            </div>
             <IconButton label="Open pond settings" icon="Settings" onClick={openSettings} />
-        </div>
-        <div className="pointer-events-none absolute right-1.5 bottom-1.5 left-1.5 flex items-end justify-between gap-2">
-          {hud.breath ? <BreathGuide phase={hud.breath} dotRef={breathDotRef} /> : null}
-          <div className="ml-auto flex min-w-0 justify-end">
-            {view === "catch" ? (
-              <CatchHud hud={hud} grade={config.poi} />
-            ) : summary ? (
-              <CatchSummary session={summary} config={config} onDismiss={dismissSummary} />
-            ) : null}
+            <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
           </div>
         </div>
+        {hud.breath ? (
+          <div className="pointer-events-none absolute bottom-1.5 left-1.5">
+            <BreathGuide phase={hud.breath} dotRef={breathDotRef} />
+          </div>
+        ) : null}
       </section>
     );
   }
@@ -1263,7 +1291,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
         </div>
         {view === "catch" && settingsTab === "display" ? (
           <p className="text-xs text-muted-foreground">
-            Tap the water to place the scoop. When a ! appears, tap again to catch. Auto catch resumes after 15 seconds.
+            The scoop moves by itself. Tap the water, or press Space, when a ! appears. Auto catch resumes after 15 seconds.
           </p>
         ) : null}
 
@@ -1273,7 +1301,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
             tabIndex={0}
             aria-label={
               view === "catch"
-                ? "Koi pond. Tap the water to move the poi; tap when a koi is over it to scoop."
+                ? CATCH_HINT
                 : "Koi pond. Click to scatter a little food."
             }
             className="block w-full cursor-pointer touch-none overflow-hidden outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"

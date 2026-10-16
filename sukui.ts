@@ -1,9 +1,10 @@
-// Koi-sukui, the festival game of scooping fish with a paper poi, kept simple:
-// the poi waits still in the water, koi gather under a still poi, and when one
-// is right above it a "!" shows. Tap then to scoop it. Each koi scooped rests
-// in a floating bowl for a moment and then goes back. Wet paper weakens, and a
-// big koi strains it, so a poi tears now and then and a fresh one comes.
-// Left alone, the poi plays by itself.
+// Koi-sukui, the festival game of scooping fish with a paper poi, kept to one
+// action: the poi moves and dips by itself, koi gather under a still poi, and
+// when one is right above it a "!" shows. Tap then to scoop it; tap too soon
+// and the koi darts off. Each koi scooped rests in a floating bowl for a
+// moment and then goes back. Wet paper weakens, and a big koi strains it, so a
+// poi tears now and then and a fresh one comes. Left alone, the poi scoops by
+// itself.
 
 import { addRipple, attend, bodyPoint, clamp, placeKoi, type Koi, type Pond } from "./koi.ts";
 import type { PoiGrade } from "./config.ts";
@@ -64,6 +65,7 @@ export type SukuiEvent =
   | { type: "bite"; koiId: string }
   | { type: "scooped"; koiId: string; auto: boolean }
   | { type: "missed"; koiId: string }
+  | { type: "early" }
   | { type: "torn" }
   | { type: "released"; koiId: string };
 
@@ -106,23 +108,21 @@ export function isAuto(sukui: Sukui): boolean {
 }
 
 /**
- * The player tapped the water. With a koi over the poi, that scoops it;
- * otherwise the poi moves to the tapped spot and waits there.
+ * The player tapped, anywhere on the water or from the keyboard. With a koi
+ * over the poi, that scoops it. Too soon, while a koi is still coming, it
+ * startles that koi away and another is called a little later.
  */
-export function tapAt(sukui: Sukui, pond: Pond, x: number, y: number, rng: () => number): SukuiEvent[] {
-  sukui.playerMs = 0;
-  if (sukui.phase.kind === "bite") return scoop(sukui, pond, rng, false);
-  if (sukui.torn) return [];
-  sukui.tx = clamp(x, 6, pond.width - 6);
-  sukui.ty = clamp(y, sukui.minY, sukui.maxY);
-  lift(sukui);
-  return [];
-}
-
-/** A tap from the keyboard: scoops if a koi is over the poi. */
 export function tap(sukui: Sukui, pond: Pond, rng: () => number): SukuiEvent[] {
   sukui.playerMs = 0;
-  return sukui.phase.kind === "bite" ? scoop(sukui, pond, rng, false) : [];
+  const phase = sukui.phase;
+  if (phase.kind === "bite") return scoop(sukui, pond, rng, false);
+  if (phase.kind !== "waiting" || !phase.caller) return [];
+  const caller = pond.koi.find((koi) => koi.id === phase.caller);
+  if (caller && !caller.away) startle(caller, sukui, pond);
+  phase.caller = null;
+  phase.callAt = phase.ms + 1_500;
+  addRipple(pond, sukui.x, sukui.y, POI_RADIUS + 2, 5);
+  return [{ type: "early" }];
 }
 
 function lift(sukui: Sukui) {
@@ -130,11 +130,11 @@ function lift(sukui: Sukui) {
   sukui.phase = { kind: "moving" };
 }
 
-function wait(sukui: Sukui, rng: () => number, soon = false) {
+function wait(sukui: Sukui, rng: () => number) {
   sukui.phase = {
     kind: "waiting",
     ms: 0,
-    callAt: (soon ? 800 : 1_500) + rng() * 2_500,
+    callAt: 1_500 + rng() * 2_500,
     caller: null,
     calledMs: 0,
   };
@@ -232,7 +232,7 @@ export function stepSukui(sukui: Sukui, pond: Pond, dtMs: number, rng: () => num
     sukui.torn = false;
     sukui.paper = 1;
     sukui.tearSeed++;
-    if (auto) pickSpot(sukui, pond, rng);
+    pickSpot(sukui, pond, rng);
     lift(sukui);
   }
 
@@ -293,8 +293,8 @@ export function stepSukui(sukui: Sukui, pond: Pond, dtMs: number, rng: () => num
           phase.callAt = phase.ms + 1_000;
         }
       }
-      // Auto play moves on from a quiet spot.
-      if (auto && phase.ms > 20_000 && !caller) {
+      // The poi moves on from a quiet spot.
+      if (phase.ms > 20_000 && !caller) {
         pickSpot(sukui, pond, rng);
         lift(sukui);
       }
@@ -322,13 +322,8 @@ export function stepSukui(sukui: Sukui, pond: Pond, dtMs: number, rng: () => num
     case "cooldown": {
       phase.ms += dtMs;
       if (phase.ms >= COOLDOWN_MS && !sukui.torn) {
-        if (auto) {
-          pickSpot(sukui, pond, rng);
-          lift(sukui);
-        } else {
-          sukui.dipped = true;
-          wait(sukui, rng, true);
-        }
+        pickSpot(sukui, pond, rng);
+        lift(sukui);
       }
       break;
     }
@@ -351,7 +346,7 @@ function callKoi(sukui: Sukui, pond: Pond): Koi | undefined {
   return best;
 }
 
-/** Auto play picks a spot near where the koi are, inside the view. */
+/** Picks the poi's next spot near where the koi are, inside the view. */
 function pickSpot(sukui: Sukui, pond: Pond, rng: () => number) {
   const swimming = pond.koi.filter((koi) => !koi.away);
   const near = swimming[Math.floor(rng() * swimming.length)];
