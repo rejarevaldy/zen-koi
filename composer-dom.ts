@@ -32,17 +32,19 @@ export function insertComposerSlot(from: Element, pluginId: string): HTMLElement
 }
 
 /**
- * Squares the chat input's top corners so the pond above joins it into one
- * box. Returns a function that restores them.
+ * Squares the chat input's top corners and hides its top border, so the pond
+ * above runs straight into it as one box. Returns a function that restores them.
  */
 export function squareComposerTop(from: Element): (() => void) | null {
   const surface = findComposerSurface(from);
   if (!surface) return null;
-  const { borderTopLeftRadius, borderTopRightRadius } = surface.style;
+  const { borderTopLeftRadius, borderTopRightRadius, borderTopColor } = surface.style;
   surface.style.borderTopLeftRadius = "0";
   surface.style.borderTopRightRadius = "0";
+  surface.style.borderTopColor = "transparent";
   return () => {
     surface.style.borderTopLeftRadius = borderTopLeftRadius;
     surface.style.borderTopRightRadius = borderTopRightRadius;
+    surface.style.borderTopColor = borderTopColor;
   };
 }

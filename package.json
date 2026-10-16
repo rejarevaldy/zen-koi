@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-zen-koi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A quiet pixel-art koi pond above the chat input while the thread's agent works.",
   "keywords": [
@@ -24,14 +24,18 @@
     "koi.ts",
     "scene.ts",
     "composer-dom.ts",
-    "underwater.ts",
+    "composer-water.ts",
+    "config.ts",
+    "sukui.ts",
+    "sound.ts",
+    "world.ts",
     "assets",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "bb plugin build",
-    "test": "node --experimental-strip-types --no-warnings --test koi.test.ts",
+    "test": "node --experimental-strip-types --no-warnings --test koi.test.ts sukui.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "engines": {
@@ -45,12 +49,18 @@
       "icon": "./assets/koi.svg",
       "experimental_icons": {
         "koi": "./assets/koi.svg",
-        "breath": "./assets/breath.svg"
+        "breath": "./assets/breath.svg",
+        "poi": "./assets/poi.svg",
+        "sound": "./assets/sound.svg",
+        "expand": "./assets/expand.svg"
       }
     },
     "server": "./server.ts",
     "app": "./app.tsx",
     "skills": []
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@get-bb/plugin-sdk": "0.6.37",

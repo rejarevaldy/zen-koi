@@ -1,26 +1,40 @@
-// Draws the pond, seen from above, at a low logical resolution that the browser
-// scales up with `image-rendering: pixelated`. The strip is an illustration with
-// its own palette per time of day and season, not themed app chrome.
+// Paints the pond, seen from above, at a low logical resolution that the
+// browser scales up with `image-rendering: pixelated`. One painter serves one
+// pond world; each canvas (the strip, the chat input, the pond page) paints its
+// own band of rows from it, so the water runs on from one into the next.
 
-import {
-  bodyPoint,
-  seededRng,
-  type Drift,
-  type Koi,
-  type Pond,
-  type Season,
-  type TimeOfDay,
-  type VarietyId,
-} from "./koi.ts";
+import { bodyPoint, seededRng, type Drift, type Koi, type Pond, type Region } from "./koi.ts";
+import { POI_RADIUS, type Sukui } from "./sukui.ts";
+import type { PondConfig, Season, TimeOfDay, Weather } from "./config.ts";
 
-/** Logical pixels; the strip is SCENE_HEIGHT * PIXEL_SCALE CSS pixels tall. */
-export const SCENE_HEIGHT = 32;
+/** CSS pixels per pond pixel. */
 export const PIXEL_SCALE = 3;
-/** First row of water below the bank. */
-export const WATER_TOP = 7;
+/** Height of the strip above the chat input, in pond pixels. */
+export const STRIP_ROWS = 32;
+/** The shore never reaches below this row, and koi stay below it. */
+export const SHORE_ROWS = 8;
+/** Rows over which the water goes from shallow to deep. */
+const DEPTH_RANGE = 22;
 const LANTERN_MIN_WIDTH = 110;
+const WORLD_SEED = 20_241;
 
-// ---------------------------------------------------------------- colors
+export type Environment = {
+  season: Season;
+  time: TimeOfDay;
+  weather: Weather;
+  garden: PondConfig["garden"];
+};
+
+/**
+ * A wash of the page's background over the water, so text in the chat input
+ * stays readable. It ramps in from `start` to full strength at `full`; the
+ * strip and the chat input share the same ramp, so their seam disappears.
+ */
+export type Scrim = { color: string; alpha: number; start: number; full: number };
+
+export type View = { y0: number; rows: number; scrim: Scrim | null };
+
+// ---------------------------------------------------------------- color
 
 type Rgb = readonly [number, number, number];
 const parsed = new Map<string, Rgb>();
@@ -37,7 +51,7 @@ function rgb(hex: string): Rgb {
 }
 
 /** Mixes two colors in twentieths, which keeps the palette small and pixel-y. */
-function mix(a: string, b: string, t: number): string {
+export function mix(a: string, b: string, t: number): string {
   const step = Math.round(Math.min(1, Math.max(0, t)) * 20);
   if (step === 0) return a;
   if (step === 20) return b;
@@ -57,90 +71,123 @@ function mix(a: string, b: string, t: number): string {
   return value;
 }
 
-type Water = { top: string; bottom: string; sparkle: string; shadow: string };
-
-const WATER: Record<TimeOfDay, Water> = {
-  dawn: { top: "#6f98a0", bottom: "#2f5868", sparkle: "#ffe2bf", shadow: "#1f3a4a" },
-  day: { top: "#56a7a3", bottom: "#1e5e6c", sparkle: "#e0f7f1", shadow: "#123e4a" },
-  dusk: { top: "#5f7192", bottom: "#29375a", sparkle: "#f7bd86", shadow: "#18203a" },
-  night: { top: "#1f3a4e", bottom: "#0b1a2a", sparkle: "#8fb6d6", shadow: "#050c16" },
+type Light = {
+  /** Water from the shallows to the deepest part. */
+  water: readonly string[];
+  sparkle: string;
+  shade: string;
+  /** How strongly sunlight ripples across the bed. */
+  caustics: number;
+  /** Land, pads, and trees fade toward this. */
+  dim: string;
+  dimAmount: number;
 };
 
-/** How far land, pads, and koi fade into the light of each time of day. */
-const DIM: Record<TimeOfDay, { color: string; amount: number }> = {
-  dawn: { color: "#4a3a5e", amount: 0.15 },
-  day: { color: "#000000", amount: 0 },
-  dusk: { color: "#2e2444", amount: 0.3 },
-  night: { color: "#08101e", amount: 0.55 },
+const LIGHT: Record<TimeOfDay, Light> = {
+  dawn: {
+    water: ["#a9cfc0", "#80b1aa", "#5f949a", "#477889", "#365f74", "#294b60"],
+    sparkle: "#ffe8c8",
+    shade: "#1d3346",
+    caustics: 0.1,
+    dim: "#5a4668",
+    dimAmount: 0.14,
+  },
+  day: {
+    water: ["#93d4c2", "#64b8ab", "#43999c", "#2e7c89", "#226474", "#194f60"],
+    sparkle: "#f2fff8",
+    shade: "#0c2f3a",
+    caustics: 0.13,
+    dim: "#000000",
+    dimAmount: 0,
+  },
+  dusk: {
+    water: ["#b49aa6", "#8a7f9d", "#67688f", "#4d557c", "#3b4468", "#2c3454"],
+    sparkle: "#ffcf96",
+    shade: "#1a1a34",
+    caustics: 0.06,
+    dim: "#3a2a4e",
+    dimAmount: 0.28,
+  },
+  night: {
+    water: ["#355466", "#2a4658", "#213a4b", "#192f3e", "#122533", "#0c1b28"],
+    sparkle: "#b4d0ee",
+    shade: "#050c16",
+    caustics: 0,
+    dim: "#0a1424",
+    dimAmount: 0.55,
+  },
 };
+
+const RAIN_TINT = "#45535e";
 
 type Land = {
-  grass: string;
-  grassDark: string;
-  accents: readonly string[];
-  stone: string;
-  stoneLight: string;
-  stoneDark: string;
+  grass: readonly [string, string, string];
+  edge: string;
+  flowers: readonly string[];
+  stone: readonly [string, string, string];
   /** Snow on top of the stones. */
   cap: string | null;
-  pad: string;
-  padLight: string;
-  padDark: string;
+  pad: readonly [string, string, string];
   lotus: boolean;
+  canopy: readonly string[];
+  branch: string;
 };
 
-const STONES = { stone: "#a9a395", stoneLight: "#cfc9ba", stoneDark: "#7d786d" };
+const STONE = ["#c9c2b2", "#a39c8d", "#77716a"] as const;
 
 const LAND: Record<Season, Land> = {
   spring: {
-    grass: "#78a85a",
-    grassDark: "#5a8a45",
-    accents: ["#f4b6c8", "#fbe0e8"],
-    ...STONES,
+    grass: ["#8fbf68", "#76a856", "#5c8d45"],
+    edge: "#4b6b37",
+    flowers: ["#f6bfd0", "#fde6ee", "#ffffff"],
+    stone: STONE,
     cap: null,
-    pad: "#5d9a4e",
-    padLight: "#7cb865",
-    padDark: "#3f7438",
+    pad: ["#7cbc63", "#5b9c4c", "#3f773a"],
     lotus: true,
+    canopy: ["#fbe1ea", "#f5bccd", "#e895ae", "#c97690"],
+    branch: "#5a3e38",
   },
   summer: {
-    grass: "#5f9a48",
-    grassDark: "#467a37",
-    accents: ["#f2dc6a", "#ffffff"],
-    ...STONES,
+    grass: ["#7ab55a", "#5f9a48", "#467a37"],
+    edge: "#3b5f2d",
+    flowers: ["#f4de6c", "#ffffff"],
+    stone: STONE,
     cap: null,
-    pad: "#4f9446",
-    padLight: "#6fb35c",
-    padDark: "#356b33",
+    pad: ["#72b65d", "#519748", "#357033"],
     lotus: true,
+    canopy: ["#a7d77c", "#7dbd5c", "#5a9a45", "#3d7535"],
+    branch: "#4f3a2c",
   },
   autumn: {
-    grass: "#a39a52",
-    grassDark: "#80783e",
-    accents: ["#d8622b", "#e9a23b", "#b8402a"],
-    ...STONES,
+    grass: ["#b8aa60", "#9c8f4b", "#7c723b"],
+    edge: "#5f5630",
+    flowers: ["#d8622b", "#e9a23b", "#b8402a"],
+    stone: STONE,
     cap: null,
-    pad: "#7f8f45",
-    padLight: "#a0a957",
-    padDark: "#5c6a33",
+    pad: ["#a9ad5a", "#868d45", "#636a33"],
     lotus: false,
+    canopy: ["#f6c35a", "#ee9238", "#d9602a", "#a83c24"],
+    branch: "#4d3527",
   },
   winter: {
-    grass: "#e6ecef",
-    grassDark: "#c9d4db",
-    accents: ["#ffffff"],
-    ...STONES,
-    cap: "#f2f6f8",
-    pad: "#6f8a6a",
-    padLight: "#8aa384",
-    padDark: "#52684f",
+    grass: ["#f4f7f9", "#e1e8ee", "#c8d3dc"],
+    edge: "#9fb0bd",
+    flowers: ["#ffffff"],
+    stone: STONE,
+    cap: "#f6f9fb",
+    pad: ["#8aa384", "#6f8a6a", "#52684f"],
     lotus: false,
+    canopy: [],
+    branch: "#4a3a34",
   },
 };
 
-const LOTUS = { petal: "#f2a3bc", tip: "#fde1ea", center: "#f3d36b" };
+const LOTUS = { tip: "#fde3ec", petal: "#f3a6bf", deep: "#dc7f9d", heart: "#f4d36a" };
 const LANTERN_LIGHT = "#ffd27a";
-const FOOD = ["#c6824a", "#e8b070"];
+const SAND = "#d8c79a";
+const FOOD = ["#c6824a", "#e8b070"] as const;
+const POI = { frame: "#e4473d", frameLight: "#f58a80", paper: "#f6f2e8" };
+const BOWL = { rim: "#a8743f", rimLight: "#d09a5e", rimDark: "#7a4f28" };
 const DRIFT_COLORS: Record<Drift["kind"], readonly string[]> = {
   petal: ["#f6b9c9", "#fcdde6", "#f19ab2"],
   leaf: ["#d9622b", "#e9a23b", "#b8402a"],
@@ -148,7 +195,8 @@ const DRIFT_COLORS: Record<Drift["kind"], readonly string[]> = {
   firefly: ["#eaf59b", "#f8f2a8", "#d9f08a"],
 };
 
-// 4x4 ordered dither, in sixteenths.
+// ---------------------------------------------------------------- noise
+
 const BAYER = [
   [0, 8, 2, 10],
   [12, 4, 14, 6],
@@ -156,17 +204,10 @@ const BAYER = [
   [15, 7, 13, 5],
 ] as const;
 
+/** 4x4 ordered dither threshold in [0, 1). */
 function bayer(x: number, y: number): number {
   return BAYER[y & 3]![x & 3]! / 16;
 }
-
-// ---------------------------------------------------------------- koi
-
-type KoiColors = { body: string; fin: string };
-
-const WHITE = "#f4f0e6";
-const RED = "#d9452b";
-const BLACK = "#24211f";
 
 function hash(seed: number, x: number, y: number): number {
   let h = (seed * 374761393 + x * 668265263 + y * 1274126177) | 0;
@@ -174,7 +215,7 @@ function hash(seed: number, x: number, y: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-/** Smooth value noise, for patches that follow the body. */
+/** Smooth value noise in [0, 1). */
 function noise(seed: number, x: number, y: number): number {
   const ix = Math.floor(x);
   const iy = Math.floor(y);
@@ -182,11 +223,36 @@ function noise(seed: number, x: number, y: number): number {
   const fy = y - iy;
   const sx = fx * fx * (3 - 2 * fx);
   const sy = fy * fy * (3 - 2 * fy);
-  const top = hash(seed, ix, iy) + (hash(seed, ix + 1, iy) - hash(seed, ix, iy)) * sx;
-  const bottom =
-    hash(seed, ix, iy + 1) + (hash(seed, ix + 1, iy + 1) - hash(seed, ix, iy + 1)) * sx;
-  return top + (bottom - top) * sy;
+  const a = hash(seed, ix, iy);
+  const b = hash(seed, ix + 1, iy);
+  const c = hash(seed, ix, iy + 1);
+  const d = hash(seed, ix + 1, iy + 1);
+  const top = a + (b - a) * sx;
+  return top + (c + (d - c) * sx - top) * sy;
 }
+
+function clampInt(value: number, low: number, high: number): number {
+  return Math.max(low, Math.min(high, Math.round(value)));
+}
+
+function newCanvas(width: number, height: number): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+function plot(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, 1, 1);
+}
+
+// ---------------------------------------------------------------- koi
+
+const WHITE = "#f6f2e9";
+const RED = "#d8432c";
+const DEEP_RED = "#b3341f";
+const BLACK = "#252220";
 
 /**
  * One body pixel's color. `u` runs from the head (0) to the tail (1), `v` across
@@ -194,121 +260,141 @@ function noise(seed: number, x: number, y: number): number {
  */
 function koiColor(koi: Koi, u: number, v: number, px: number, py: number): string {
   const seed = koi.seed;
-  const patch = noise(seed, u * 4.5, v * 1.2 + 3);
+  const patch = noise(seed, u * 4.2, v * 1.1 + 3);
   const fleck = noise(seed + 7, u * 7, v * 2 + 9);
   const across = Math.abs(v);
-  const checker = (px + py) & 1;
-  switch (koi.variety as VarietyId) {
+  const scale = (px + py) & 1;
+  switch (koi.variety) {
     case "kohaku":
-      return patch > 0.48 && u < 0.92 ? RED : WHITE;
+      if (u < 0.08) return WHITE;
+      return patch > 0.47 && u < 0.9 ? (patch > 0.7 ? DEEP_RED : RED) : WHITE;
     case "tancho":
-      return Math.hypot((u - 0.14) * 3.2, v * 0.7) < 0.42 ? RED : WHITE;
+      return Math.hypot((u - 0.15) * 3.4, v * 0.75) < 0.42 ? RED : WHITE;
     case "sanke":
-      if (fleck > 0.72 && u > 0.2) return BLACK;
-      return patch > 0.52 && u < 0.92 ? RED : WHITE;
+      if (fleck > 0.74 && u > 0.22 && u < 0.9) return BLACK;
+      return patch > 0.5 && u < 0.9 && u > 0.06 ? RED : WHITE;
     case "showa":
-      if (patch > 0.5 && u < 0.9) return RED;
-      return fleck > 0.58 ? WHITE : BLACK;
+      if (patch > 0.5 && u < 0.88) return RED;
+      return fleck > 0.6 ? WHITE : BLACK;
     case "ogon":
-      return across < 0.3 ? "#f8db82" : "#e5ad3e";
+      return across < 0.3 ? "#fbe08c" : scale ? "#e8b245" : "#f0c45a";
     case "yamabuki":
-      return across < 0.3 ? "#fde98f" : "#efcb45";
+      return across < 0.3 ? "#fff0a0" : scale ? "#f0cb48" : "#f6d861";
     case "asagi":
-      if (u < 0.12) return "#d6e0e4";
-      if (across > 0.62) return "#e07a3a";
-      return checker ? "#5f7f99" : "#7898b0";
+      if (u < 0.12) return "#dce5e8";
+      if (across > 0.6) return "#e27c3c";
+      return scale ? "#5c7c96" : "#7c9bb3";
     case "chagoi":
-      if (across < 0.25) return "#b88552";
-      return checker ? "#94643a" : "#a87645";
+      if (across < 0.28) return "#c08c58";
+      return scale ? "#96663c" : "#a97846";
     case "shiro-utsuri":
-      return patch > 0.46 ? WHITE : BLACK;
+      return patch > 0.45 ? WHITE : BLACK;
     case "kumonryu":
       return noise(seed + 3, u * 6, v * 1.6) > 0.5 ? WHITE : BLACK;
   }
 }
 
-function koiFin(koi: Koi): string {
+function finColor(koi: Koi): string {
   switch (koi.variety) {
     case "ogon":
-      return "#f2c862";
+      return "#f6d07a";
     case "yamabuki":
-      return "#f7dc72";
+      return "#fbe48a";
     case "chagoi":
-      return "#c49464";
+      return "#cfa070";
     case "showa":
     case "shiro-utsuri":
     case "kumonryu":
-      return "#5a5651";
+      return "#6b665f";
     case "asagi":
-      return "#e89a62";
+      return "#eca070";
     default:
-      return "#fbf6ee";
+      return "#fbf7ef";
   }
 }
 
 /** Half-width of the body at `u`: a rounded head, broad shoulders, slim tail. */
 function radiusAt(u: number): number {
-  if (u < 0.12) return 1.5 + (u / 0.12) * 0.9;
-  if (u < 0.33) return 2.4 + ((u - 0.12) / 0.21) * 0.35;
-  return 2.75 - ((u - 0.33) / 0.67) * 2.1;
+  if (u < 0.1) return 1.4 + (u / 0.1) * 0.95;
+  if (u < 0.32) return 2.35 + ((u - 0.1) / 0.22) * 0.45;
+  return 2.8 - ((u - 0.32) / 0.68) * 2.15;
 }
 
-type KoiPixels = Map<number, KoiColors["body"]>;
 const KEY_WIDTH = 1 << 14;
 const KEY_OFFSET = 64;
 const keyOf = (x: number, y: number) => (y + KEY_OFFSET) * KEY_WIDTH + (x + KEY_OFFSET);
 const xOf = (key: number) => (key % KEY_WIDTH) - KEY_OFFSET;
 const yOf = (key: number) => Math.floor(key / KEY_WIDTH) - KEY_OFFSET;
 
-/** Rasterizes one koi: tail and fins first, so the body and head sit on top. */
-function rasterizeKoi(koi: Koi): KoiPixels {
-  const pixels: KoiPixels = new Map();
-  const length = koi.length;
-  const fin = koiFin(koi);
-  const sway = (u: number) => Math.sin(koi.phase - u * 3.2) * 0.7 * u * u;
+type KoiPixel = { color: string; fin: boolean };
 
-  // Tail: a fan that opens behind the body and sways a beat after it.
-  const tail = bodyPoint(koi, length);
-  const before = bodyPoint(koi, length - 1);
+function unit(x: number, y: number) {
+  const length = Math.hypot(x, y) || 1;
+  return { x: x / length, y: y / length };
+}
+
+/**
+ * Rasterizes one koi, fins first so the body and head sit on top. `scale`
+ * multiplies every coordinate, for a koi drawn bigger or smaller than life.
+ */
+function rasterizeKoi(koi: Koi, scale = 1): Map<number, KoiPixel> {
+  const pixels = new Map<number, KoiPixel>();
+  const length = koi.length * scale;
+  const fin = finColor(koi);
+  const at = (s: number) => {
+    const point = bodyPoint(koi, s / scale);
+    return { x: point.x * scale, y: point.y * scale };
+  };
+  const sway = (u: number) => Math.sin(koi.phase - u * 3.2) * 0.65 * u * u * scale;
+
+  // Tail: a long fan that opens behind the body and sways a beat after it.
+  const tail = at(length);
+  const before = at(length - scale);
   const back = unit(tail.x - before.x, tail.y - before.y);
   const side = { x: -back.y, y: back.x };
-  const flick = Math.sin(koi.phase - 3.6) * 0.9;
-  for (let k = 0.5; k <= 3.5; k += 0.5) {
-    const spread = 0.5 + k * 0.6;
+  const flick = Math.sin(koi.phase - 3.8) * 1.1 * scale;
+  const tailLength = 4 * scale;
+  for (let k = 0.5; k <= tailLength; k += 0.5) {
+    const spread = (0.6 + (k / scale) * 0.62) * scale;
     for (let across = -spread; across <= spread; across += 0.5) {
-      // A shallow notch in the middle of the fan's trailing edge.
-      if (k > 2.5 && Math.abs(across) < 0.8) continue;
-      const x = Math.floor(tail.x + back.x * k + side.x * (across + flick * (k / 3.5)));
-      const y = Math.floor(tail.y + back.y * k + side.y * (across + flick * (k / 3.5)));
-      pixels.set(keyOf(x, y), fin);
+      // A notch in the middle of the trailing edge splits the fan in two.
+      if (k > tailLength * 0.62 && Math.abs(across) < spread * 0.42) continue;
+      const bend = flick * (k / tailLength);
+      const x = Math.floor(tail.x + back.x * k + side.x * (across + bend));
+      const y = Math.floor(tail.y + back.y * k + side.y * (across + bend));
+      pixels.set(keyOf(x, y), { color: fin, fin: true });
     }
   }
 
-  // Pectoral fins, which beat slowly.
-  const shoulder = bodyPoint(koi, length * 0.22);
-  const ahead = bodyPoint(koi, length * 0.22 - 1);
+  // Pectoral fins, rounded, beating slowly.
+  const shoulder = at(length * 0.22);
+  const ahead = at(length * 0.22 - scale);
   const forward = unit(ahead.x - shoulder.x, ahead.y - shoulder.y);
   const normal = { x: -forward.y, y: forward.x };
   const beat = Math.sin(koi.phase * 0.7) * 0.5 + 0.5;
   for (const sign of [-1, 1]) {
-    for (let k = 0; k <= 1.5; k += 0.5) {
-      const reach = radiusAt(0.22) + 0.4 + k * (0.6 + beat * 0.4);
-      const x = Math.floor(shoulder.x + normal.x * sign * reach - forward.x * (k + 0.5));
-      const y = Math.floor(shoulder.y + normal.y * sign * reach - forward.y * (k + 0.5));
-      pixels.set(keyOf(x, y), fin);
+    for (let k = 0; k <= 1.6 * scale; k += 0.5) {
+      for (let w = 0; w <= 0.8 * scale; w += 0.5) {
+        const reach = radiusAt(0.22) * scale + 0.3 + k * (0.55 + beat * 0.35);
+        const x = Math.floor(shoulder.x + normal.x * sign * reach - forward.x * (k + w + 0.4));
+        const y = Math.floor(shoulder.y + normal.y * sign * reach - forward.y * (k + w + 0.4));
+        pixels.set(keyOf(x, y), { color: fin, fin: true });
+      }
     }
   }
 
+  let headDirection = { x: Math.cos(koi.heading), y: Math.sin(koi.heading) };
   for (let s = length; s >= 0; s -= 0.5) {
     const u = s / length;
-    const point = bodyPoint(koi, s);
-    const next = bodyPoint(koi, Math.max(0, s - 0.75));
-    const direction = s === 0 ? { x: Math.cos(koi.heading), y: Math.sin(koi.heading) } : unit(next.x - point.x, next.y - point.y);
+    const point = at(s);
+    const next = at(Math.max(0, s - 0.75));
+    const direction = s < 0.75 ? headDirection : unit(next.x - point.x, next.y - point.y);
+    if (s >= 0.75 && s < 1.25) headDirection = direction;
     const across = { x: -direction.y, y: direction.x };
     const offset = sway(u);
     const cx = point.x + across.x * offset;
     const cy = point.y + across.y * offset;
-    const r = radiusAt(u);
+    const r = radiusAt(u) * scale;
     for (let py = Math.floor(cy - r - 1); py <= Math.ceil(cy + r); py++) {
       for (let px = Math.floor(cx - r - 1); px <= Math.ceil(cx + r); px++) {
         const dx = px + 0.5 - cx;
@@ -316,401 +402,840 @@ function rasterizeKoi(koi: Koi): KoiPixels {
         if (dx * dx + dy * dy > r * r + 0.15) continue;
         const v = (dx * across.x + dy * across.y) / Math.max(0.6, r);
         let color = koiColor(koi, u, v, px, py);
-        // A little roundness: the flanks sit in shade.
-        if (Math.abs(v) > 0.78) color = mix(color, "#000000", 0.18);
-        pixels.set(keyOf(px, py), color);
+        // Light from above: a sheen down the back, shade along the flanks.
+        if (Math.abs(v) < 0.22 && u > 0.08 && u < 0.7) color = mix(color, "#ffffff", 0.16);
+        else if (Math.abs(v) > 0.76) color = mix(color, "#000000", 0.2);
+        pixels.set(keyOf(px, py), { color, fin: false });
       }
+    }
+  }
+
+  // Eyes, once the koi is big enough to show them.
+  if (length >= 11) {
+    const eye = at(1.2 * scale);
+    const across = { x: -headDirection.y, y: headDirection.x };
+    const reach = radiusAt(0.1) * scale * 0.8;
+    for (const sign of [-1, 1]) {
+      const x = Math.floor(eye.x + across.x * sign * reach);
+      const y = Math.floor(eye.y + across.y * sign * reach);
+      if (pixels.has(keyOf(x, y))) pixels.set(keyOf(x, y), { color: "#1a1714", fin: false });
     }
   }
   return pixels;
 }
 
-function unit(x: number, y: number) {
-  const length = Math.hypot(x, y) || 1;
-  return { x: x / length, y: y / length };
-}
-
 export type KoiStyle = {
-  /** The water the koi swims in, for depth and fins. */
+  /** Water the koi swims through, for depth and fins. */
   water: string;
-  shadow: string | null;
-  dim: { color: string; amount: number };
-  /** Rows above this stay empty (the bank, or air above a rising flood). */
-  clipTop: number;
-  alpha: number;
+  shade: string | null;
+  dim: string;
+  dimAmount: number;
 };
 
-export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle) {
-  const pixels = rasterizeKoi(koi);
-  const fin = koiFin(koi);
-  if (style.shadow) {
+export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle, scale = 1) {
+  const pixels = rasterizeKoi(koi, scale);
+  if (style.shade) {
+    // The shadow on the bed: farther from the fish the nearer it is to the surface.
     const lift = 1 - koi.depth;
-    const ox = Math.round(1 + lift);
-    const oy = Math.round(1 + lift * 1.5);
-    ctx.globalAlpha = 0.3 * (1 - koi.depth * 0.6) * style.alpha;
-    ctx.fillStyle = style.shadow;
-    for (const key of pixels.keys()) {
-      const y = yOf(key) + oy;
-      if (y >= style.clipTop) ctx.fillRect(xOf(key) + ox, y, 1, 1);
-    }
+    const ox = Math.round((1 + lift * 1.5) * Math.max(scale, 0.6));
+    const oy = Math.round((1 + lift * 2) * Math.max(scale, 0.6));
+    ctx.globalAlpha = 0.26 * (1 - koi.depth * 0.5);
+    ctx.fillStyle = style.shade;
+    for (const key of pixels.keys()) ctx.fillRect(xOf(key) + ox, yOf(key) + oy, 1, 1);
   }
-  ctx.globalAlpha = style.alpha;
-  for (const [key, color] of pixels) {
-    const y = yOf(key);
-    if (y < style.clipTop) continue;
-    let shade = color === fin ? mix(color, style.water, 0.35) : color;
-    shade = mix(shade, style.water, koi.depth * 0.55);
-    if (style.dim.amount > 0) shade = mix(shade, style.dim.color, style.dim.amount * 0.6);
+  const depth = koi.depth * 0.55;
+  for (const [key, pixel] of pixels) {
+    let shade = pixel.fin ? mix(pixel.color, style.water, 0.4) : pixel.color;
+    shade = mix(shade, style.water, depth);
+    if (style.dimAmount > 0) shade = mix(shade, style.dim, style.dimAmount * 0.6);
+    ctx.globalAlpha = pixel.fin ? 0.8 : 1;
     ctx.fillStyle = shade;
-    ctx.fillRect(xOf(key), y, 1, 1);
+    ctx.fillRect(xOf(key), yOf(key), 1, 1);
   }
   ctx.globalAlpha = 1;
 }
 
-// ---------------------------------------------------------------- the strip
+/**
+ * A copy of `koi` swimming a small circle around (cx, cy), for koi shown
+ * outside the pond: in the sukui bowl, or in a portrait. Coordinates are in
+ * the space `drawKoi` multiplies by `scale`.
+ */
+export function circlingKoi(koi: Koi, cx: number, cy: number, radius: number, angle: number): Koi {
+  const at = (a: number) => ({ x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius });
+  const head = at(angle);
+  const trail = [];
+  for (let step = 1; step <= koi.length + 6; step++) trail.push(at(angle - step / radius));
+  return { ...koi, x: head.x, y: head.y, heading: angle + Math.PI / 2, depth: 0, trail };
+}
 
-export type DrawInput = {
-  pond: Pond;
-  season: Season;
-  timeOfDay: TimeOfDay;
-  now: number;
-};
+/** A koi alone on a small patch of water, for the pond page's list. */
+export function drawKoiPortrait(canvas: HTMLCanvasElement, koi: Koi) {
+  const ctx = canvas.getContext("2d")!;
+  const light = LIGHT.day;
+  ctx.imageSmoothingEnabled = false;
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) {
+      plot(ctx, x, y, bayer(x, y) < 0.5 ? light.water[2]! : light.water[3]!);
+    }
+  }
+  const pose = { ...koi, depth: 0.1, phase: 1.2, trail: [] as { x: number; y: number }[] };
+  // Facing left, centered with its tail.
+  const y = canvas.height / 2;
+  const x = (canvas.width - koi.length - 4) / 2 + 1;
+  pose.x = x;
+  pose.y = y;
+  pose.heading = Math.PI;
+  for (let step = 1; step <= koi.length + 6; step++) pose.trail.push({ x: x + step, y });
+  drawKoi(ctx, pose, { water: light.water[4]!, shade: light.shade, dim: light.dim, dimAmount: 0 });
+}
 
-export class PondScene {
-  readonly #canvas: HTMLCanvasElement;
-  readonly #ctx: CanvasRenderingContext2D;
-  readonly #base = document.createElement("canvas");
-  readonly #pads = document.createElement("canvas");
-  #cacheKey = "";
+// ---------------------------------------------------------------- the painter
+
+type Pad = { x: number; y: number; r: number; notch: number; flower: "bloom" | "bud" | null };
+type Plant = { x: number; y: number; blades: number; height: number; seed: number };
+
+export class PondPainter {
+  #key = "";
   width = 0;
+  height = 0;
+  #shore: Int16Array = new Int16Array(0);
+  #base: HTMLCanvasElement | null = null;
+  #pads: HTMLCanvasElement | null = null;
+  #canopy: HTMLCanvasElement | null = null;
+  #canopyShade: HTMLCanvasElement | null = null;
+  #plants: Plant[] = [];
+  #lantern: { x: number; y: number } | null = null;
+  #light: Light = LIGHT.day;
+  #land: Land = LAND.spring;
+  /** Where the tree hangs over the water; petals fall from here. */
+  canopy: Region | null = null;
 
-  constructor(canvas: HTMLCanvasElement) {
-    this.#canvas = canvas;
-    this.#ctx = canvas.getContext("2d")!;
-  }
-
-  /** Matches the logical width to the strip's CSS width and returns it. */
-  resize(cssWidth: number): number {
-    const width = Math.max(40, Math.ceil(cssWidth / PIXEL_SCALE));
-    if (width !== this.width) {
-      this.width = width;
-      this.#canvas.width = width;
-      this.#canvas.height = SCENE_HEIGHT;
-      this.#cacheKey = "";
+  /** Rebuilds the cached layers when the pond's size or look changes. */
+  layout(width: number, height: number, focusBottom: number, env: Environment) {
+    const garden = env.garden;
+    const key = [
+      width,
+      height,
+      focusBottom,
+      env.season,
+      env.time,
+      env.weather,
+      garden.lantern,
+      garden.tree,
+      garden.lilies,
+      garden.plants,
+    ].join(":");
+    if (key === this.#key) return;
+    this.#key = key;
+    this.width = width;
+    this.height = height;
+    this.#light = lightFor(env);
+    this.#land = LAND[env.season];
+    this.#shore = shoreLine(width);
+    this.#lantern =
+      garden.lantern && width >= LANTERN_MIN_WIDTH
+        ? { x: width - 30, y: this.#shore[width - 27]! + 3 }
+        : null;
+    this.#base = this.#paintBase();
+    this.#pads = this.#paintPads(garden.lilies, focusBottom);
+    this.#plants = garden.plants ? plantsFor(width, height) : [];
+    if (garden.tree) {
+      const reach = Math.min(72, Math.round(width * 0.3));
+      this.canopy = { x0: 0, x1: reach, y0: 0, y1: 13 };
+      [this.#canopy, this.#canopyShade] = this.#paintCanopy(reach);
+    } else {
+      this.canopy = null;
+      this.#canopy = null;
+      this.#canopyShade = null;
     }
-    return width;
   }
 
-  /** Where a click on the strip lands, in pond pixels. */
-  toPond(clientX: number, clientY: number): { x: number; y: number } {
-    const rect = this.#canvas.getBoundingClientRect();
-    return {
-      x: ((clientX - rect.left) / Math.max(1, rect.width)) * this.width,
-      y: ((clientY - rect.top) / Math.max(1, rect.height)) * SCENE_HEIGHT,
-    };
-  }
-
-  draw({ pond, season, timeOfDay, now }: DrawInput) {
-    const ctx = this.#ctx;
-    const width = this.width;
-    const water = WATER[timeOfDay];
-    const dim = DIM[timeOfDay];
-    const land = LAND[season];
-    const key = `${width}:${season}:${timeOfDay}`;
-    if (key !== this.#cacheKey) {
-      this.#cacheKey = key;
-      paintBase(this.#base, width, water, land, dim, timeOfDay);
-      paintPads(this.#pads, width, land, dim);
-    }
+  /** Paints the rows `view.y0` to `view.y0 + view.rows` of the pond into `ctx`. */
+  paint(
+    ctx: CanvasRenderingContext2D,
+    pond: Pond,
+    env: Environment,
+    now: number,
+    view: View,
+    sukui: Sukui | null = null,
+  ) {
+    const light = this.#light;
+    const land = this.#land;
+    const { y0, rows } = view;
+    const y1 = y0 + rows;
     ctx.imageSmoothingEnabled = false;
     ctx.globalAlpha = 1;
-    ctx.drawImage(this.#base, 0, 0);
+    ctx.save();
+    ctx.translate(0, -y0);
+    if (this.#base) ctx.drawImage(this.#base, 0, 0);
 
-    drawSparkles(ctx, width, SCENE_HEIGHT, WATER_TOP + 2, water.sparkle, now);
-    const lantern = lanternX(width);
-    if (lantern !== null && timeOfDay !== "day") {
-      drawGlow(ctx, lantern + 3, WATER_TOP + 2, 7, LANTERN_LIGHT, 0.16, now, WATER_TOP);
-    }
+    this.#paintPlants(ctx, now, y0, y1);
 
     const style: KoiStyle = {
-      water: water.bottom,
-      shadow: water.shadow,
-      dim,
-      clipTop: WATER_TOP,
-      alpha: 1,
+      water: light.water[4]!,
+      shade: light.shade,
+      dim: light.dim,
+      dimAmount: light.dimAmount,
     };
-    const byDepth = [...pond.koi].sort((a, b) => b.depth - a.depth);
-    for (const koi of byDepth) drawKoi(ctx, koi, style);
+    const byDepth = pond.koi.filter((koi) => !koi.away).sort((a, b) => b.depth - a.depth);
+    for (const koi of byDepth) {
+      if (koi.y > y0 - 20 && koi.y < y1 + 20) drawKoi(ctx, koi, style);
+    }
+    if (sukui?.dipped) paintPoi(ctx, sukui, light, now);
 
+    if (env.weather === "clear") this.#paintCaustics(ctx, light, now, y0, y1);
+    if (this.#canopyShade) {
+      ctx.globalAlpha = env.weather === "rain" ? 0.12 : 0.24;
+      ctx.drawImage(this.#canopyShade, 0, 0);
+      ctx.globalAlpha = 1;
+      if (env.time !== "night" && env.weather === "clear") this.#paintDapple(ctx, light, now, y0, y1);
+    }
+
+    if (this.#pads) ctx.drawImage(this.#pads, 0, 0);
     for (const food of pond.food) {
-      ctx.globalAlpha = Math.max(0.2, 1 - food.ageMs / 30_000);
-      ctx.fillStyle = FOOD[(food.id & 1) as 0 | 1]!;
+      ctx.globalAlpha = Math.max(0.25, 1 - food.ageMs / 40_000);
+      ctx.fillStyle = FOOD[food.id & 1]!;
       ctx.fillRect(Math.round(food.x), Math.round(food.y), 1, 1);
     }
     ctx.globalAlpha = 1;
+    drawDrifts(ctx, pond, now, true);
+    drawRipples(ctx, pond, light.sparkle, y0, y1);
 
-    ctx.drawImage(this.#pads, 0, 0);
-    drawRipples(ctx, pond, water.sparkle, WATER_TOP);
-    drawDrifts(ctx, pond, now, WATER_TOP);
-  }
-}
-
-function lanternX(width: number): number | null {
-  return width >= LANTERN_MIN_WIDTH ? width - 24 : null;
-}
-
-function paintBase(
-  canvas: HTMLCanvasElement,
-  width: number,
-  water: Water,
-  land: Land,
-  dim: { color: string; amount: number },
-  time: TimeOfDay,
-) {
-  canvas.width = width;
-  canvas.height = SCENE_HEIGHT;
-  const ctx = canvas.getContext("2d")!;
-  const dimmed = (color: string) => mix(color, dim.color, dim.amount);
-  const px = (x: number, y: number, color: string) => {
-    ctx.fillStyle = color;
-    ctx.fillRect(x, y, 1, 1);
-  };
-
-  // Water: four bands, dithered into each other.
-  const stops = [0, 1, 2, 3].map((i) => mix(water.top, water.bottom, i / 3));
-  const rows = SCENE_HEIGHT - WATER_TOP;
-  for (let y = WATER_TOP; y < SCENE_HEIGHT; y++) {
-    const t = (y - WATER_TOP) / Math.max(1, rows - 1);
-    for (let x = 0; x < width; x++) {
-      const level = Math.max(0, Math.min(3, Math.round(t * 3 + bayer(x, y) - 0.5)));
-      let color = stops[level]!;
-      // The bank's shade on the water right below it.
-      if (y < WATER_TOP + 2) color = mix(color, water.shadow, y === WATER_TOP ? 0.45 : 0.2);
-      px(x, y, color);
+    if (env.time === "night" && env.weather === "clear") this.#paintMoon(ctx, light, now);
+    if (env.time === "day" || env.time === "dawn") this.#paintGlints(ctx, light, now, y0, y1);
+    const lantern = this.#lantern;
+    if (lantern) {
+      const lit = env.time !== "day" || env.weather === "rain";
+      if (lit) paintLanternGlow(ctx, lantern.x + 3, lantern.y + 2, now);
+      paintLantern(ctx, lantern.x, lantern.y, land, light, lit, now);
     }
-  }
 
-  // Grass along the bank.
-  const grass = dimmed(land.grass);
-  const grassDark = dimmed(land.grassDark);
-  for (let y = 0; y < WATER_TOP; y++) {
-    for (let x = 0; x < width; x++) {
-      px(x, y, bayer(x, y) < 0.3 ? grassDark : grass);
+    if (sukui) {
+      paintBowl(ctx, sukui, pond, style, light, now);
+      if (!sukui.dipped) paintPoi(ctx, sukui, light, now);
     }
-  }
-  const rng = seededRng(width * 31 + 7);
-  for (let index = 0; index < width / 6; index++) {
-    const color = land.accents[Math.floor(rng() * land.accents.length)]!;
-    px(Math.floor(rng() * width), Math.floor(rng() * 3), dimmed(color));
+
+    if (this.#canopy) ctx.drawImage(this.#canopy, 0, 0);
+    drawDrifts(ctx, pond, now, false);
+    if (env.weather === "rain") paintRain(ctx, this.width, y0, y1, now);
+    if (view.scrim) paintScrim(ctx, this.width, view.scrim, y0, y1);
+    ctx.restore();
   }
 
-  // A row of rounded stones at the water's edge.
-  const stone = dimmed(land.stone);
-  const stoneLight = dimmed(land.stoneLight);
-  const stoneDark = dimmed(land.stoneDark);
-  const cap = land.cap ? dimmed(land.cap) : null;
-  let x = -2 - Math.floor(rng() * 3);
-  while (x < width) {
-    const w = 4 + Math.floor(rng() * 6);
-    const h = 3 + Math.floor(rng() * 2);
-    const top = WATER_TOP - h + 1;
-    for (let dy = 0; dy < h; dy++) {
-      for (let dx = 0; dx < w; dx++) {
-        const corner = (dy === 0 || dy === h - 1) && (dx === 0 || dx === w - 1);
-        if (corner) continue;
-        let color = stone;
-        if (dy === 0) color = cap ?? stoneLight;
-        else if (dy === h - 1 || dx === w - 1) color = stoneDark;
-        else if (dx === 0) color = stoneLight;
-        px(x + dx, top + dy, color);
+  #paintBase(): HTMLCanvasElement {
+    const { width, height } = this;
+    const canvas = newCanvas(width, height);
+    const ctx = canvas.getContext("2d")!;
+    const light = this.#light;
+    const land = this.#land;
+    const shore = this.#shore;
+    const dimmed = (color: string) => mix(color, light.dim, light.dimAmount);
+
+    // Water: deeper away from the shore, with soft patches of sand on the bed.
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const edge = shore[x]!;
+        if (y < edge) continue;
+        const fromShore = y - edge;
+        const bed = noise(WORLD_SEED, x * 0.05, y * 0.09) - 0.5;
+        const depth = Math.min(1, fromShore / DEPTH_RANGE) + bed * 0.32;
+        const level = clampInt(depth * 5 + bayer(x, y) - 0.5, 0, 5);
+        let color = light.water[level]!;
+        const grain = hash(WORLD_SEED + 1, x, y);
+        if (fromShore < 3 && grain > 0.8) color = mix(color, dimmed(SAND), 0.4);
+        else if (grain > 0.965) color = light.water[Math.max(0, level - 1)]!;
+        // The bank's shade on the water right below it.
+        if (fromShore === 0) color = mix(color, light.shade, 0.4);
+        else if (fromShore === 1) color = mix(color, light.shade, 0.16);
+        plot(ctx, x, y, color);
       }
     }
-    x += w + Math.floor(rng() * 3);
+
+    // The bank: grass with soft patches, a darker lip where it meets the water.
+    const [grassLight, grass, grassDark] = land.grass.map(dimmed) as [string, string, string];
+    for (let x = 0; x < width; x++) {
+      const edge = shore[x]!;
+      for (let y = 0; y < edge; y++) {
+        const patch = noise(WORLD_SEED + 2, x * 0.18, y * 0.35);
+        let color =
+          patch + bayer(x, y) * 0.3 > 0.72 ? grassLight : patch < 0.35 ? grassDark : grass;
+        if (y === edge - 1) color = dimmed(land.edge);
+        plot(ctx, x, y, color);
+      }
+    }
+    const rng = seededRng(WORLD_SEED + width);
+    for (let index = 0; index < width / 5; index++) {
+      const x = Math.floor(rng() * width);
+      const y = Math.floor(rng() * Math.max(1, shore[x]! - 2));
+      plot(ctx, x, y, dimmed(land.flowers[Math.floor(rng() * land.flowers.length)]!));
+    }
+    // Grass hanging over the water here and there.
+    for (let index = 0; index < width / 9; index++) {
+      const x = Math.floor(rng() * width);
+      const edge = shore[x]!;
+      plot(ctx, x, edge, grassDark);
+      if (rng() < 0.5) {
+        plot(ctx, x + (rng() < 0.5 ? -1 : 1), edge + 1, mix(grassDark, light.water[0]!, 0.4));
+      }
+    }
+
+    // Mossy stones along the edge, some sitting in the shallows.
+    const [stoneLight, stone, stoneDark] = land.stone.map(dimmed) as [string, string, string];
+    const cap = land.cap ? dimmed(land.cap) : null;
+    let x = Math.floor(rng() * 6);
+    while (x < width + 4) {
+      const rx = 1.6 + rng() * 2.4;
+      const ry = rx * (0.6 + rng() * 0.2);
+      const cx = x + rx;
+      const cy = shore[clampInt(cx, 0, width - 1)]! - 0.5 + rng() * 1.6;
+      for (let py = Math.floor(cy - ry - 1); py <= Math.ceil(cy + ry); py++) {
+        for (let px = Math.floor(cx - rx - 1); px <= Math.ceil(cx + rx); px++) {
+          const dx = (px + 0.5 - cx) / rx;
+          const dy = (py + 0.5 - cy) / ry;
+          const d = dx * dx + dy * dy;
+          if (d > 1 || px < 0 || px >= width || py < 0) continue;
+          let color = stone;
+          if (dx + dy < -0.55) color = cap ?? stoneLight;
+          else if (dx + dy > 0.6 || d > 0.82) color = stoneDark;
+          if (!cap && dy < -0.2 && noise(WORLD_SEED + 3, px * 0.6, py * 0.6) > 0.66) {
+            color = dimmed(land.edge);
+          }
+          plot(ctx, px, py, color);
+        }
+      }
+      // A thin line of foam where the stone meets the water.
+      const foamY = Math.ceil(cy + ry) + 1;
+      ctx.globalAlpha = 0.35;
+      for (let px = Math.floor(cx - rx + 1); px < cx + rx - 1; px++) {
+        if (px >= 0 && px < width && foamY >= shore[px]!) plot(ctx, px, foamY, light.sparkle);
+      }
+      ctx.globalAlpha = 1;
+      x += Math.ceil(rx * 2) + 2 + Math.floor(rng() * 9);
+    }
+    return canvas;
   }
 
-  const lantern = lanternX(width);
-  if (lantern !== null) paintLantern(ctx, lantern, land, dimmed, time);
-}
+  #paintPads(amount: PondConfig["garden"]["lilies"], focusBottom: number): HTMLCanvasElement | null {
+    if (amount === "none") return null;
+    const { width, height } = this;
+    const canvas = newCanvas(width, height);
+    const ctx = canvas.getContext("2d")!;
+    const light = this.#light;
+    const land = this.#land;
+    const dimmed = (color: string) => mix(color, light.dim, light.dimAmount);
+    const rng = seededRng(WORLD_SEED + 7 + width);
+    const per = amount === "many" ? 38 : 75;
+    const count = Math.max(2, Math.round(width / per));
+    const bottom = Math.min(height - 4, Math.max(SHORE_ROWS + 8, focusBottom + 6));
+    const pads: Pad[] = [];
+    for (let index = 0; index < count; index++) {
+      const r = 3.4 + rng() * 2;
+      const pad: Pad = {
+        x: ((index + 0.5) * width) / count + (rng() - 0.5) * (width / count) * 0.7,
+        y: SHORE_ROWS + 4 + rng() * Math.max(2, bottom - SHORE_ROWS - 6),
+        r,
+        notch: rng() * Math.PI * 2,
+        flower: null,
+      };
+      const flower = rng();
+      if (land.lotus) pad.flower = flower < 0.45 ? "bloom" : flower < 0.7 ? "bud" : null;
+      pads.push(pad);
+      // Smaller pads gather around the big ones.
+      const friends = amount === "many" ? 2 : 1;
+      for (let friend = 0; friend < friends; friend++) {
+        if (rng() < 0.35) continue;
+        const angle = rng() * Math.PI * 2;
+        const gap = r + 1.6 + rng() * 1.5;
+        pads.push({
+          x: pad.x + Math.cos(angle) * gap * 1.3,
+          y: pad.y + Math.sin(angle) * gap * 0.8,
+          r: 1.6 + rng() * 1.3,
+          notch: rng() * Math.PI * 2,
+          flower: null,
+        });
+      }
+    }
+    // Shadows first, so no pad's shadow lands on another pad.
+    ctx.globalAlpha = 0.28;
+    for (const pad of pads) paintPadShape(ctx, pad, () => light.shade, 1, 1);
+    ctx.globalAlpha = 1;
+    const [padLight, padMid, padDark] = land.pad.map(dimmed) as [string, string, string];
+    for (const pad of pads) {
+      paintPadShape(ctx, pad, (dx, dy, distance) => {
+        if (distance > pad.r - 0.9) return dx + dy > 0 ? padDark : padLight;
+        // Faint veins running out from the middle.
+        const vein = Math.abs(Math.sin((Math.atan2(dy, dx) - pad.notch) * 3.5));
+        return vein < 0.18 && distance > 1 ? padDark : padMid;
+      });
+    }
+    for (const pad of pads) {
+      if (pad.flower) {
+        paintLotus(ctx, pad.x, pad.y, pad.flower, (color) => mix(color, dimmed(color), 0.5));
+      }
+    }
+    return canvas;
+  }
 
-/** A small stone lantern on the bank, lit from dusk to dawn. */
-function paintLantern(
-  ctx: CanvasRenderingContext2D,
-  left: number,
-  land: Land,
-  dimmed: (color: string) => string,
-  time: TimeOfDay,
-) {
-  const stone = dimmed(land.stone);
-  const light = dimmed(land.stoneLight);
-  const dark = dimmed(land.stoneDark);
-  const lit = time !== "day";
-  const window = lit ? LANTERN_LIGHT : dimmed("#4a4740");
-  // Rows top to bottom; a space leaves the bank showing through.
-  const shape = [
-    "  LLL  ",
-    "LLLLLLL",
-    " DWWWD ",
-    "SSSSSSS",
-    "  SDS  ",
-    " SSSSD ",
-    " DDDDD ",
-  ];
-  const colors: Record<string, string> = {
-    L: land.cap ? dimmed(land.cap) : light,
-    S: stone,
-    D: dark,
-    W: window,
-  };
-  shape.forEach((row, dy) => {
-    [...row].forEach((cell, dx) => {
-      const color = colors[cell];
-      if (!color) return;
-      ctx.fillStyle = color;
-      ctx.fillRect(left + dx, dy, 1, 1);
-    });
-  });
-}
+  #paintCanopy(reach: number): [HTMLCanvasElement, HTMLCanvasElement] {
+    const { width, height } = this;
+    const canopy = newCanvas(width, height);
+    const shadeCanvas = newCanvas(width, height);
+    const ctx = canopy.getContext("2d")!;
+    const shadeCtx = shadeCanvas.getContext("2d")!;
+    const light = this.#light;
+    const land = this.#land;
+    const dimmed = (color: string) => mix(color, light.dim, light.dimAmount);
+    const rng = seededRng(WORLD_SEED + 11);
 
-function paintPads(
-  canvas: HTMLCanvasElement,
-  width: number,
-  land: Land,
-  dim: { color: string; amount: number },
-) {
-  canvas.width = width;
-  canvas.height = SCENE_HEIGHT;
-  const ctx = canvas.getContext("2d")!;
-  ctx.clearRect(0, 0, width, SCENE_HEIGHT);
-  const dimmed = (color: string) => mix(color, dim.color, dim.amount);
-  const rng = seededRng(width * 13 + 101);
-  const count = Math.max(2, Math.floor(width / 70));
-  for (let index = 0; index < count; index++) {
-    const cx = ((index + 0.5) * width) / count + (rng() - 0.5) * 30;
-    const cy = WATER_TOP + 6 + rng() * (SCENE_HEIGHT - WATER_TOP - 10);
-    const radius = 3.6 + rng() * 1.6;
-    paintPad(ctx, cx, cy, radius, rng() * Math.PI * 2, land, dimmed);
-    // A smaller pad alongside, now and then.
-    if (rng() < 0.6) {
-      const angle = rng() * Math.PI * 2;
-      const gap = radius + 2.5;
-      paintPad(
-        ctx,
-        cx + Math.cos(angle) * gap,
-        cy + Math.sin(angle) * gap * 0.8,
-        1.8 + rng(),
-        rng() * Math.PI * 2,
-        land,
-        dimmed,
+    // A main bough reaching in from the corner, with a few twigs off it.
+    const main: { x: number; y: number }[] = [];
+    for (let t = 0; t <= 1; t += 0.02) {
+      main.push({ x: -3 + t * reach, y: 1 + t * 8 + Math.sin(t * 3.2) * 2.5 });
+    }
+    const boughs = [main];
+    for (let twig = 0; twig < 4; twig++) {
+      const start = main[Math.floor((0.25 + twig * 0.17) * main.length)]!;
+      const up = twig % 2 === 0 ? -1 : 1;
+      const length = 8 + rng() * 6;
+      const rise = 3 + rng() * 3;
+      const path: { x: number; y: number }[] = [];
+      for (let t = 0; t <= 1; t += 0.05) path.push({ x: start.x + t * length, y: start.y + up * t * rise });
+      boughs.push(path);
+    }
+
+    const clusters: { x: number; y: number; r: number }[] = [];
+    if (land.canopy.length > 0) {
+      for (const path of boughs) {
+        for (let index = 2; index < path.length; index += 4) {
+          const point = path[index]!;
+          clusters.push({
+            x: point.x + (rng() - 0.5) * 3,
+            y: point.y + (rng() - 0.5) * 3,
+            r: 2.4 + rng() * 2.6,
+          });
+        }
+      }
+    }
+    // The tree's shadow on the water, offset as if lit from the upper left.
+    const shadow = (x: number, y: number) => {
+      if (x + 5 < width && y + 5 < height) plot(shadeCtx, x + 5, y + 5, light.shade);
+    };
+    const branch = dimmed(land.branch);
+    for (const path of boughs) {
+      for (const point of path) {
+        for (const dy of path === main ? [0, 1] : [0]) {
+          const x = Math.round(point.x);
+          const y = Math.round(point.y) + dy;
+          if (x < 0 || y < 0) continue;
+          plot(ctx, x, y, branch);
+          shadow(x, y);
+          if (land.cap && dy === 0 && y > 0) plot(ctx, x, y - 1, dimmed(land.cap));
+        }
+      }
+    }
+    const tones = land.canopy.map(dimmed);
+    for (const cluster of clusters) {
+      const r = cluster.r;
+      for (let py = Math.floor(cluster.y - r); py <= Math.ceil(cluster.y + r); py++) {
+        for (let px = Math.floor(cluster.x - r); px <= Math.ceil(cluster.x + r); px++) {
+          if (px < 0 || py < 0) continue;
+          const dx = px + 0.5 - cluster.x;
+          const dy = py + 0.5 - cluster.y;
+          const d = Math.hypot(dx, dy) / r;
+          // Ragged edges: leaves, not a ball.
+          if (d > 1 || (d > 0.7 && hash(WORLD_SEED + 13, px, py) > 0.55)) continue;
+          // Lit from the upper left.
+          const lit = 0.5 - (dx + dy) / (r * 2.5) + (bayer(px, py) - 0.5) * 0.5;
+          plot(ctx, px, py, tones[clampInt((1 - lit) * (tones.length - 1), 0, tones.length - 1)]!);
+          shadow(px, py);
+        }
+      }
+    }
+    return [canopy, shadeCanvas];
+  }
+
+  #paintPlants(ctx: CanvasRenderingContext2D, now: number, y0: number, y1: number) {
+    if (this.#plants.length === 0) return;
+    ctx.fillStyle = mix(this.#light.water[5]!, "#3d7a46", 0.45);
+    ctx.globalAlpha = 0.7;
+    for (const plant of this.#plants) {
+      if (plant.y < y0 - 10 || plant.y - plant.height > y1) continue;
+      for (let blade = 0; blade < plant.blades; blade++) {
+        const lean = (blade - (plant.blades - 1) / 2) * 0.7;
+        const tall = plant.height - Math.abs(lean) * 1.5;
+        for (let i = 0; i < tall; i++) {
+          const sway = Math.sin(now * 0.0011 + plant.seed + blade + i * 0.35) * i * 0.22;
+          ctx.fillRect(Math.round(plant.x + lean * i * 0.4 + sway), Math.round(plant.y - i), 1, 1);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** Sunlight bent by the ripples, playing over the bed as a moving net. */
+  #paintCaustics(ctx: CanvasRenderingContext2D, light: Light, now: number, y0: number, y1: number) {
+    if (light.caustics <= 0) return;
+    const t = now / 1000;
+    const shore = this.#shore;
+    ctx.fillStyle = light.sparkle;
+    ctx.globalAlpha = light.caustics;
+    for (let y = Math.max(0, y0); y < Math.min(this.height, y1); y++) {
+      for (let x = 0; x < this.width; x++) {
+        if (y <= shore[x]!) continue;
+        // Only in drifting patches, and thin, so it reads as light, not tiles.
+        const patch = noise(WORLD_SEED + 29, x * 0.035 + t * 0.06, y * 0.06 - t * 0.04);
+        if (patch < 0.45) continue;
+        const v =
+          Math.sin(x * 0.42 + Math.sin(y * 0.31 + t * 0.7) * 1.4 + t * 0.5) +
+          Math.sin(y * 0.55 - Math.sin(x * 0.27 - t * 0.6) * 1.4 - t * 0.4);
+        if (Math.abs(v) < (patch - 0.45) * 0.5 * (0.4 + bayer(x, y))) ctx.fillRect(x, y, 1, 1);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** Leaf shade drifting on the water under the tree. */
+  #paintDapple(ctx: CanvasRenderingContext2D, light: Light, now: number, y0: number, y1: number) {
+    const canopy = this.canopy;
+    if (!canopy) return;
+    const t = now / 1000;
+    const reach = canopy.x1 * 1.6;
+    ctx.fillStyle = light.shade;
+    ctx.globalAlpha = 0.14;
+    for (let y = Math.max(SHORE_ROWS, y0); y < Math.min(this.height, y1, 34); y++) {
+      for (let x = 0; x < Math.min(this.width, reach); x++) {
+        const fade = x / reach + y / 34;
+        const n = noise(
+          WORLD_SEED + 17,
+          x * 0.16 + Math.sin(t * 0.35) * 0.7,
+          y * 0.22 + Math.cos(t * 0.27) * 0.5,
+        );
+        if (n - fade * 0.45 > 0.42 + bayer(x, y) * 0.12) ctx.fillRect(x, y, 1, 1);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** Sun glints winking on the surface. */
+  #paintGlints(ctx: CanvasRenderingContext2D, light: Light, now: number, y0: number, y1: number) {
+    const count = Math.max(4, Math.floor((this.width * (y1 - y0)) / 420));
+    ctx.fillStyle = light.sparkle;
+    for (let index = 0; index < count; index++) {
+      const twinkle = Math.sin(now * 0.0016 * (0.6 + hash(5, index, 2)) + index * 1.7);
+      if (twinkle < 0.6) continue;
+      const x = Math.floor(hash(5, index, 1) * this.width);
+      const y = Math.floor(y0 + hash(5, index, 3) * (y1 - y0));
+      if (y <= this.#shore[x]! + 1) continue;
+      ctx.globalAlpha = Math.min(0.8, (twinkle - 0.6) * 2.4);
+      ctx.fillRect(x, y, twinkle > 0.9 ? 2 : 1, 1);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  #paintMoon(ctx: CanvasRenderingContext2D, light: Light, now: number) {
+    const cx = Math.round(this.width * 0.62);
+    const cy = SHORE_ROWS + 9;
+    ctx.fillStyle = "#e9eef8";
+    for (let row = -2; row <= 2; row++) {
+      const half = [2, 4, 5, 4, 2][row + 2]!;
+      const wobble = Math.round(Math.sin(now * 0.0021 + row * 1.3));
+      for (let dx = -half; dx <= half; dx++) {
+        // Broken up by the ripples, like a real reflection.
+        if (hash(9, dx + wobble, Math.floor(now / 500) + row) > 0.82) continue;
+        ctx.globalAlpha = 0.5 - Math.abs(dx) / (half * 4);
+        ctx.fillRect(cx + dx + wobble, cy + row, 1, 1);
+      }
+    }
+    // A few stars reflected nearby.
+    ctx.fillStyle = light.sparkle;
+    for (let index = 0; index < this.width / 18; index++) {
+      const twinkle = Math.sin(now * 0.0012 + index * 2.3);
+      if (twinkle < 0.3) continue;
+      ctx.globalAlpha = (twinkle - 0.3) * 0.8;
+      ctx.fillRect(
+        Math.floor(hash(21, index, 1) * this.width),
+        Math.floor(SHORE_ROWS + 2 + hash(21, index, 2) * (this.height - SHORE_ROWS - 3)),
+        1,
+        1,
       );
     }
-    const flower = rng();
-    if (land.lotus && flower < 0.75) {
-      paintLotus(ctx, Math.round(cx - 0.5), Math.round(cy - 0.5), flower < 0.5, dimmed);
-    }
+    ctx.globalAlpha = 1;
   }
 }
 
-function paintPad(
+function lightFor(env: Environment): Light {
+  const base = LIGHT[env.time];
+  if (env.weather !== "rain") return base;
+  // Rain greys everything a little and hides the sun.
+  return {
+    ...base,
+    water: base.water.map((color) => mix(color, RAIN_TINT, 0.25)),
+    caustics: 0,
+    dim: base.dimAmount > 0 ? base.dim : RAIN_TINT,
+    dimAmount: Math.max(base.dimAmount, 0.15),
+  };
+}
+
+function shoreLine(width: number): Int16Array {
+  const shore = new Int16Array(width + 1);
+  for (let x = 0; x <= width; x++) {
+    const n = noise(WORLD_SEED + 5, x * 0.07, 0) * 3.4 + noise(WORLD_SEED + 6, x * 0.23, 0) * 1.4;
+    shore[x] = clampInt(2.6 + n, 3, SHORE_ROWS - 1);
+  }
+  return shore;
+}
+
+function plantsFor(width: number, height: number): Plant[] {
+  const rng = seededRng(WORLD_SEED + 23 + width);
+  const plants: Plant[] = [];
+  const count = Math.round((width * Math.max(0, height - SHORE_ROWS - 12)) / 700);
+  for (let index = 0; index < count; index++) {
+    plants.push({
+      x: rng() * width,
+      y: SHORE_ROWS + 14 + rng() * Math.max(1, height - SHORE_ROWS - 14),
+      blades: 2 + Math.floor(rng() * 3),
+      height: 4 + rng() * 5,
+      seed: rng() * 10,
+    });
+  }
+  return plants;
+}
+
+function paintPadShape(
   ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  radius: number,
-  notch: number,
-  land: Land,
-  dimmed: (color: string) => string,
+  pad: Pad,
+  colorAt: (dx: number, dy: number, distance: number) => string,
+  ox = 0,
+  oy = 0,
 ) {
-  for (let y = Math.floor(cy - radius - 1); y <= Math.ceil(cy + radius); y++) {
-    if (y < WATER_TOP + 1) continue;
-    for (let x = Math.floor(cx - radius - 1); x <= Math.ceil(cx + radius); x++) {
-      const dx = x + 0.5 - cx;
-      const dy = y + 0.5 - cy;
+  for (let y = Math.floor(pad.y - pad.r - 1); y <= Math.ceil(pad.y + pad.r); y++) {
+    if (y < SHORE_ROWS) continue;
+    for (let x = Math.floor(pad.x - pad.r - 1); x <= Math.ceil(pad.x + pad.r); x++) {
+      const dx = x + 0.5 - pad.x;
+      const dy = (y + 0.5 - pad.y) * 1.15;
       const distance = Math.hypot(dx, dy);
-      if (distance > radius) continue;
-      const angle = Math.atan2(Math.sin(Math.atan2(dy, dx) - notch), Math.cos(Math.atan2(dy, dx) - notch));
-      if (Math.abs(angle) < 0.35 && distance > 0.8) continue;
-      let color = land.pad;
-      if (distance > radius - 1) color = dx + dy > 0 ? land.padDark : land.padLight;
-      ctx.fillStyle = dimmed(color);
-      ctx.fillRect(x, y, 1, 1);
+      if (distance > pad.r) continue;
+      const angle = Math.atan2(dy, dx) - pad.notch;
+      if (Math.abs(Math.atan2(Math.sin(angle), Math.cos(angle))) < 0.38 && distance > 0.7) continue;
+      plot(ctx, x + ox, y + oy, colorAt(dx, dy, distance));
     }
   }
 }
 
 function paintLotus(
   ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  bloom: boolean,
+  cx: number,
+  cy: number,
+  kind: "bloom" | "bud",
   dimmed: (color: string) => string,
 ) {
-  const shape = bloom
-    ? ["  T  ", " TPT ", "TPCPT", " TPT ", "  T  "]
-    : [" T ", "TPT", " P "];
-  const colors: Record<string, string> = { T: LOTUS.tip, P: LOTUS.petal, C: LOTUS.center };
-  const half = Math.floor(shape.length / 2);
+  const shape =
+    kind === "bloom"
+      ? ["  T T  ", " TPTPT ", "TPDHDPT", " PDHDP ", "  PPP  "]
+      : [" T ", "TPT", "PDP"];
+  const colors: Record<string, string> = {
+    T: LOTUS.tip,
+    P: LOTUS.petal,
+    D: LOTUS.deep,
+    H: LOTUS.heart,
+  };
+  const left = Math.round(cx) - Math.floor(shape[0]!.length / 2);
+  const top = Math.round(cy) - Math.floor(shape.length / 2) - 1;
   shape.forEach((row, dy) => {
     [...row].forEach((cell, dx) => {
       const color = colors[cell];
-      if (!color) return;
-      // Flowers catch what light there is, so they dim half as much.
-      ctx.fillStyle = mix(color, dimmed(color), 0.5);
-      ctx.fillRect(x - half + dx, y - half + dy, 1, 1);
+      if (color) plot(ctx, left + dx, top + dy, dimmed(color));
     });
   });
 }
 
-function drawSparkles(
+/** A snow-viewing lantern on a stone in the shallows. */
+function paintLantern(
   ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  top: number,
-  color: string,
+  left: number,
+  base: number,
+  land: Land,
+  light: Light,
+  lit: boolean,
   now: number,
 ) {
-  const count = Math.max(4, Math.floor(width / 12));
-  ctx.fillStyle = color;
-  for (let index = 0; index < count; index++) {
-    const a = hash(17, index, 1);
-    const b = hash(17, index, 2);
-    const c = hash(17, index, 3);
-    const twinkle = Math.sin(now * 0.0016 * (0.6 + b) + index * 1.7);
-    if (twinkle < 0.55) continue;
-    const x = Math.floor((a * width + now * 0.003 * (0.4 + c)) % width);
-    const y = Math.floor(top + c * (height - top - 2) + Math.sin(now * 0.0006 + index));
-    ctx.globalAlpha = Math.min(0.75, (twinkle - 0.55) * 2.2);
-    ctx.fillRect(x, y, twinkle > 0.88 ? 2 : 1, 1);
+  const dimmed = (color: string) => mix(color, light.dim, light.dimAmount);
+  const [stoneLight, stone, stoneDark] = land.stone.map(dimmed) as [string, string, string];
+  const flicker = 0.85 + Math.sin(now * 0.0047) * 0.08 + Math.sin(now * 0.0131) * 0.07;
+  const window = lit ? mix("#c98a3a", LANTERN_LIGHT, flicker) : dimmed("#4d4943");
+  const shape = [
+    "   C   ",
+    " CCCCC ",
+    "LLLLLLL",
+    " SWWWD ",
+    " SWWWD ",
+    " SSSSD ",
+    "  SSD  ",
+    "  SSD  ",
+    " SSSDD ",
+  ];
+  const colors: Record<string, string> = {
+    C: land.cap ? dimmed(land.cap) : stoneLight,
+    L: stone,
+    S: stone,
+    D: stoneDark,
+    W: window,
+  };
+  const top = base - shape.length;
+  // The stone it stands on, half in the water, and that stone's shadow.
+  ctx.globalAlpha = 0.3;
+  for (let dy = 2; dy <= 3; dy++) {
+    for (let dx = 0; dx <= 8; dx++) plot(ctx, left + dx, base + dy, light.shade);
+  }
+  ctx.globalAlpha = 1;
+  for (let dy = -1; dy <= 2; dy++) {
+    for (let dx = -1; dx <= 7; dx++) {
+      const ex = (dx - 3) / 4.6;
+      const ey = (dy - 0.5) / 2;
+      if (ex * ex + ey * ey > 1) continue;
+      plot(ctx, left + dx, base + dy, ex + ey < -0.3 ? stoneLight : ex + ey > 0.5 ? stoneDark : stone);
+    }
+  }
+  shape.forEach((row, dy) => {
+    [...row].forEach((cell, dx) => {
+      const color = colors[cell];
+      if (color) plot(ctx, left + dx, top + dy, color);
+    });
+  });
+}
+
+function paintLanternGlow(ctx: CanvasRenderingContext2D, cx: number, cy: number, now: number) {
+  const flicker = 0.85 + Math.sin(now * 0.0047) * 0.08 + Math.sin(now * 0.0131) * 0.07;
+  ctx.fillStyle = LANTERN_LIGHT;
+  for (let ring = 12; ring >= 2; ring -= 2) {
+    ctx.globalAlpha = 0.07 * flicker * (1 - ring / 13);
+    for (let y = Math.floor(cy - ring * 0.7); y <= cy + ring * 0.7; y++) {
+      const half = Math.floor(Math.sqrt(Math.max(0, ring * ring - ((y - cy) / 0.7) ** 2)));
+      ctx.fillRect(Math.round(cx - half), y, half * 2 + 1, 1);
+    }
+  }
+  // Its reflection, a broken streak of light below it.
+  for (let k = 1; k <= 9; k++) {
+    const wobble = Math.round(Math.sin(now * 0.003 + k * 0.9) * 1.2);
+    ctx.globalAlpha = 0.45 * flicker * (1 - k / 10);
+    ctx.fillRect(cx - 1 + wobble, cy + 3 + k, k % 3 === 0 ? 1 : 2, 1);
   }
   ctx.globalAlpha = 1;
 }
 
-function drawGlow(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  radius: number,
-  color: string,
-  strength: number,
-  now: number,
-  clipTop: number,
-) {
-  const flicker = 0.85 + Math.sin(now * 0.0031) * 0.08 + Math.sin(now * 0.0117) * 0.05;
-  ctx.fillStyle = color;
-  for (let ring = radius; ring >= 1; ring -= 2) {
-    ctx.globalAlpha = strength * flicker * (1 - ring / (radius + 1)) * 0.6;
-    for (let y = Math.floor(cy - ring); y <= cy + ring; y++) {
-      if (y < clipTop) continue;
-      const half = Math.floor(Math.sqrt(Math.max(0, ring * ring - (y - cy) ** 2)) * 1.3);
-      ctx.fillRect(Math.round(cx - half), y, half * 2 + 1, 1);
+/** The paper poi: red hoop, paper that greys and gives way as it wears. */
+function paintPoi(ctx: CanvasRenderingContext2D, sukui: Sukui, light: Light, now: number) {
+  if (sukui.torn && sukui.tornMs < 1_800) return;
+  const cx = sukui.x;
+  const cy = sukui.y;
+  const r = POI_RADIUS;
+  const under = sukui.dipped;
+  const water = light.water[2]!;
+  const fadeOut = sukui.torn ? (sukui.tornMs - 1_800) / 700 : 1;
+  const tint = (color: string) => (under ? mix(color, water, 0.4) : color);
+  const dimmed = (color: string) => mix(tint(color), light.dim, light.dimAmount * 0.6);
+
+  if (!under) {
+    // Held above the water: a soft shadow below and to the right.
+    ctx.globalAlpha = 0.22 * fadeOut;
+    ctx.fillStyle = light.shade;
+    for (let y = Math.floor(cy - r); y <= cy + r; y++) {
+      for (let x = Math.floor(cx - r); x <= cx + r; x++) {
+        if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= r) ctx.fillRect(x + 2, y + 3, 1, 1);
+      }
+    }
+  }
+
+  // The handle, out to the lower right.
+  ctx.globalAlpha = fadeOut;
+  for (let k = r - 0.3; k < r + 6.5; k += 0.5) {
+    const x = Math.floor(cx + k * 0.72);
+    const y = Math.floor(cy + k * 0.69);
+    plot(ctx, x, y, dimmed(POI.frame));
+    if (k > r + 1) plot(ctx, x + 1, y, dimmed(POI.frameLight));
+  }
+
+  // Wet paper turns see-through; worn paper opens in holes, a torn one in tatters.
+  const wet = under ? 0.55 : 0.85 - (1 - sukui.paper) * 0.25;
+  for (let y = Math.floor(cy - r - 1); y <= cy + r + 1; y++) {
+    for (let x = Math.floor(cx - r - 1); x <= cx + r + 1; x++) {
+      const distance = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+      if (distance > r + 0.55) continue;
+      if (distance > r - 0.65) {
+        const lit = x + 0.5 - cx + (y + 0.5 - cy) < 0;
+        ctx.globalAlpha = fadeOut;
+        plot(ctx, x, y, dimmed(lit ? POI.frameLight : POI.frame));
+        continue;
+      }
+      const hole = hash(sukui.tearSeed, x - Math.floor(cx), y - Math.floor(cy));
+      if (sukui.torn ? distance < r - 1.6 || hole > 0.5 : hole > sukui.paper + 0.45) continue;
+      ctx.globalAlpha = wet * fadeOut;
+      plot(ctx, x, y, dimmed(POI.paper));
+    }
+  }
+  if (under) {
+    // The water closing over the hoop.
+    const pulse = (now / 900) % 1;
+    ctx.globalAlpha = 0.35 * (1 - pulse);
+    ctx.fillStyle = light.sparkle;
+    const ring = r + 1 + pulse * 2;
+    for (let index = 0; index < 28; index++) {
+      const angle = (index / 28) * Math.PI * 2;
+      ctx.fillRect(Math.round(cx + Math.cos(angle) * ring), Math.round(cy + Math.sin(angle) * ring * 0.85), 1, 1);
     }
   }
   ctx.globalAlpha = 1;
 }
 
-function drawRipples(ctx: CanvasRenderingContext2D, pond: Pond, color: string, clipTop: number) {
+/** The floating wooden bowl where scooped koi rest before going back. */
+function paintBowl(
+  ctx: CanvasRenderingContext2D,
+  sukui: Sukui,
+  pond: Pond,
+  style: KoiStyle,
+  light: Light,
+  now: number,
+) {
+  const cx = sukui.bowlX;
+  const cy = sukui.bowlY + Math.sin(now * 0.0012) * 0.4;
+  const r = 6.5;
+  const dimmed = (color: string) => mix(color, light.dim, light.dimAmount);
+  const inner = mix(light.water[1]!, "#ffffff", 0.12);
+  ctx.globalAlpha = 0.28;
+  ctx.fillStyle = light.shade;
+  for (let y = Math.floor(cy - r); y <= cy + r; y++) {
+    for (let x = Math.floor(cx - r); x <= cx + r; x++) {
+      if (Math.hypot(x + 0.5 - cx, (y + 0.5 - cy) * 1.1) <= r) ctx.fillRect(x + 1, y + 2, 1, 1);
+    }
+  }
+  ctx.globalAlpha = 1;
+  for (let y = Math.floor(cy - r - 1); y <= cy + r + 1; y++) {
+    for (let x = Math.floor(cx - r - 1); x <= cx + r + 1; x++) {
+      const dx = x + 0.5 - cx;
+      const dy = (y + 0.5 - cy) * 1.1;
+      const distance = Math.hypot(dx, dy);
+      if (distance > r) continue;
+      let color = inner;
+      if (distance > r - 1.3) color = dx + dy < 0 ? BOWL.rimLight : BOWL.rim;
+      else if (distance > r - 2.1) color = dx + dy > 0 ? BOWL.rimDark : mix(inner, BOWL.rimDark, 0.3);
+      plot(ctx, x, y, dimmed(color));
+    }
+  }
+  const scale = 0.55;
+  sukui.bowl.forEach((entry, index) => {
+    const koi = pond.koi.find((candidate) => candidate.id === entry.koiId);
+    if (!koi) return;
+    const angle = entry.angle + now * 0.0007 * (index % 2 ? -1 : 1);
+    const swimmer = circlingKoi(koi, cx / scale, cy / scale, 4.2 - index * 0.6, angle);
+    drawKoi(ctx, swimmer, { ...style, shade: null }, scale);
+  });
+}
+
+function drawRipples(ctx: CanvasRenderingContext2D, pond: Pond, color: string, y0: number, y1: number) {
   ctx.fillStyle = color;
   for (const ripple of pond.ripples) {
     const radius = (ripple.ageMs / 1000) * ripple.speed;
-    if (radius < 0.5) continue;
+    if (radius < 0.5 || ripple.y + radius < y0 || ripple.y - radius > y1) continue;
     const fade = 1 - radius / ripple.maxRadius;
     const drawn = new Set<number>();
     const ring = (r: number, alpha: number) => {
@@ -721,44 +1246,46 @@ function drawRipples(ctx: CanvasRenderingContext2D, pond: Pond, color: string, c
         const x = Math.round(ripple.x + Math.cos(angle) * r);
         const y = Math.round(ripple.y + Math.sin(angle) * r * 0.8);
         const key = keyOf(x, y);
-        if (y < clipTop || drawn.has(key)) continue;
+        if (y < SHORE_ROWS || drawn.has(key)) continue;
         drawn.add(key);
         ctx.fillRect(x, y, 1, 1);
       }
     };
-    ring(radius, fade * 0.7);
-    if (radius > 3) ring(radius - 2.5, fade * 0.3);
+    ring(radius, fade * 0.6);
+    if (radius > 3) ring(radius - 2.5, fade * 0.25);
   }
   ctx.globalAlpha = 1;
 }
 
-function drawDrifts(ctx: CanvasRenderingContext2D, pond: Pond, now: number, clipTop: number) {
+/** `floating` paints what rests on the water; otherwise what is still in the air. */
+function drawDrifts(ctx: CanvasRenderingContext2D, pond: Pond, now: number, floating: boolean) {
   for (const drift of pond.drifts) {
+    const onWater = drift.landed;
+    if (drift.kind === "firefly" ? floating : onWater !== floating) continue;
     const colors = DRIFT_COLORS[drift.kind];
     const color = colors[drift.tint % colors.length]!;
     const x = Math.round(drift.x);
     const y = Math.round(drift.y);
     const remaining = drift.lifeMs - drift.ageMs;
-    const fade = drift.landed || drift.kind === "firefly" ? Math.min(1, remaining / 3_000) : 1;
+    const fade = onWater || drift.kind === "firefly" ? Math.min(1, remaining / 3_000) : 1;
     if (drift.kind === "firefly") {
       const blink = Math.sin(now * 0.004 + drift.tint * 2 + drift.x) * 0.5 + 0.5;
       const appear = Math.min(1, drift.ageMs / 1_500) * fade;
       ctx.fillStyle = color;
-      ctx.globalAlpha = 0.18 * blink * appear;
+      ctx.globalAlpha = 0.16 * blink * appear;
       ctx.fillRect(x - 1, y - 1, 3, 3);
       ctx.globalAlpha = (0.35 + 0.65 * blink) * appear;
       ctx.fillRect(x, y, 1, 1);
       continue;
     }
-    // In the air, falling things skip the bank's clip; on the water they float.
-    if (drift.landed && y < clipTop) continue;
-    ctx.globalAlpha = fade * (drift.landed ? 0.9 : 1);
+    if (onWater && y < SHORE_ROWS) continue;
+    ctx.globalAlpha = fade * (onWater ? 0.9 : 1);
     ctx.fillStyle = color;
     if (drift.kind === "snow") {
       ctx.fillRect(x, y, 1, 1);
     } else if (drift.kind === "petal") {
-      const flip = Math.floor((drift.ageMs + drift.tint * 400) / 600) & 1;
-      ctx.fillRect(x, y, flip ? 2 : 1, flip ? 1 : 2);
+      const flat = onWater || ((Math.floor((drift.ageMs + drift.tint * 400) / 520) & 1) === 1);
+      ctx.fillRect(x, y, flat ? 2 : 1, flat ? 1 : 2);
     } else {
       ctx.fillRect(x, y, 2, 1);
       ctx.fillRect(x + (drift.tint & 1), y + 1, 1, 1);
@@ -767,83 +1294,26 @@ function drawDrifts(ctx: CanvasRenderingContext2D, pond: Pond, now: number, clip
   ctx.globalAlpha = 1;
 }
 
-// ---------------------------------------------------------------- the flood
-
-export type UnderwaterInput = {
-  pond: Pond;
-  /** How full the chat input is, from 0 to 1. */
-  level: number;
-  dark: boolean;
-  now: number;
-};
-
-const FLOOD_WATER = {
-  light: { top: "#bfe4df", bottom: "#93cdc8", sparkle: "#ffffff", alpha: 0.5, koi: 0.45 },
-  dark: { top: "#1d4a52", bottom: "#0f2d35", sparkle: "#9fd4d8", alpha: 0.55, koi: 0.5 },
-};
-
-/** The water inside the chat input: calm, pale, and quiet behind the text. */
-export class UnderwaterScene {
-  readonly #canvas: HTMLCanvasElement;
-  readonly #ctx: CanvasRenderingContext2D;
-  width = 0;
-  height = 0;
-
-  constructor(canvas: HTMLCanvasElement) {
-    this.#canvas = canvas;
-    this.#ctx = canvas.getContext("2d")!;
+function paintRain(ctx: CanvasRenderingContext2D, width: number, y0: number, y1: number, now: number) {
+  const frame = Math.floor(now / 70);
+  const count = Math.floor((width * (y1 - y0)) / 90);
+  ctx.fillStyle = "#dbe8f0";
+  ctx.globalAlpha = 0.32;
+  for (let index = 0; index < count; index++) {
+    const x = Math.floor(hash(31, index, frame) * width);
+    const y = Math.floor(y0 + hash(32, index, frame) * (y1 - y0));
+    ctx.fillRect(x, y, 1, 1);
+    ctx.fillRect(x - 1, y - 1, 1, 1);
   }
+  ctx.globalAlpha = 1;
+}
 
-  resize(cssWidth: number, cssHeight: number) {
-    const width = Math.max(8, Math.ceil(cssWidth / PIXEL_SCALE));
-    const height = Math.max(4, Math.ceil(cssHeight / PIXEL_SCALE));
-    if (width !== this.width || height !== this.height) {
-      this.width = width;
-      this.height = height;
-      this.#canvas.width = width;
-      this.#canvas.height = height;
-    }
+function paintScrim(ctx: CanvasRenderingContext2D, width: number, scrim: Scrim, y0: number, y1: number) {
+  ctx.fillStyle = scrim.color;
+  for (let y = Math.max(y0, scrim.start); y < y1; y++) {
+    const t = Math.min(1, (y - scrim.start + 1) / Math.max(1, scrim.full - scrim.start));
+    ctx.globalAlpha = scrim.alpha * t * t * (3 - 2 * t);
+    ctx.fillRect(0, y, width, 1);
   }
-
-  draw({ pond, level, dark, now }: UnderwaterInput) {
-    const ctx = this.#ctx;
-    const { width, height } = this;
-    const look = dark ? FLOOD_WATER.dark : FLOOD_WATER.light;
-    ctx.clearRect(0, 0, width, height);
-    const surface = Math.round(height - level * height);
-    if (surface >= height) return;
-
-    ctx.globalAlpha = look.alpha;
-    const stops = [0, 1, 2].map((i) => mix(look.top, look.bottom, i / 2));
-    for (let y = surface; y < height; y++) {
-      const t = (y - surface) / Math.max(1, height - surface - 1);
-      for (let x = 0; x < width; x += 1) {
-        const band = Math.max(0, Math.min(2, Math.round(t * 2 + bayer(x, y) - 0.5)));
-        ctx.fillStyle = stops[band]!;
-        ctx.fillRect(x, y, 1, 1);
-      }
-    }
-
-    // The surface, a lighter line that sways a little while the water moves.
-    ctx.fillStyle = look.sparkle;
-    for (let x = 0; x < width; x++) {
-      const y = surface + Math.round(Math.sin(x * 0.18 + now * 0.0015) * 0.6);
-      if (y < height) {
-        ctx.globalAlpha = look.alpha * 0.9;
-        ctx.fillRect(x, Math.max(surface, y), 1, 1);
-      }
-    }
-    ctx.globalAlpha = 1;
-
-    drawSparkles(ctx, width, height, surface + 2, look.sparkle, now);
-    // Koi in a wash of water: softer, so the text above stays easy to read.
-    const style: KoiStyle = {
-      water: look.bottom,
-      shadow: null,
-      dim: { color: look.bottom, amount: 0.4 },
-      clipTop: surface + 1,
-      alpha: look.koi,
-    };
-    for (const koi of pond.koi) drawKoi(ctx, koi, style);
-  }
+  ctx.globalAlpha = 1;
 }

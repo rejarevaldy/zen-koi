@@ -1,36 +1,64 @@
 # Zen Koi
 
-A quiet pixel-art koi pond that sits on top of a thread's chat input while the
-agent works. There is no score, no timer, and nothing to lose. Koi drift
-around, and you can watch them while you wait.
+A quiet pixel-art koi pond for bb. It sits on top of a thread's chat input
+while the agent works and runs on into the chat input itself, so your koi swim
+under the text you type. Open the **Zen Pond** page from the navigation rail to
+visit the pond any time, look after your koi, and set up the garden.
 
-Zen Koi takes the idea, and the chat-input placement, from charpeni's
+Zen Koi takes the chat-input placement from charpeni's
 [Gone Fishing](https://github.com/charpeni/bb-plugins/tree/main/plugins/gone-fishing).
-It is a calmer take on that idea, with its own art and code.
+It has its own art and code.
 
-## What it does
+## Watch or play
 
-- **Opens with the agent.** The pond appears when a turn starts and closes a
-  few seconds after it ends.
-- **Koi.** Three to six koi swim slowly, rest, and drift deeper and back up.
-  The varieties include Kohaku, Tancho, Sanke, Showa, Ogon, Yamabuki, Asagi,
-  Chagoi, Shiro Utsuri, and Kumonryu.
-- **Feeding.** Click the water, or focus the pond and press Enter, to scatter a
-  little food. The nearest koi come over to eat it.
-- **Breathing guide.** A dot fills and empties at five breaths a minute (in 4s,
-  hold 2s, out 6s), and each in-breath sends one slow ring across the pond.
-  Turn the guide off to get short reminders to rest instead.
-- **Seasons and time of day.** Spring petals, summer fireflies at dusk and
-  night, autumn leaves, and winter snow. The water and light follow your clock,
-  and a stone lantern lights up from dusk to dawn. Click the season label to
-  pin a season.
-- **Flooded chat input.** While the pond is open, pale water rises behind the
-  text in the chat input, with two faint koi of its own. Typing works as usual.
+- **Watch.** Koi wander, rest, drift deeper and back up, keep each other
+  company, and come over to look when your pointer rests on the water. Click
+  to scatter a little food and the nearest koi come to eat it.
+- **Koi-sukui.** The festival game of scooping fish with a paper *poi*, played
+  gently. Hold to dip the poi and let go to lift it. The rules follow the real
+  game:
+  - a quick, splashy entry tears the paper, and wet paper weakens over time
+  - koi flee a poi swept through the water, but gather under a still one
+  - only koi near the surface can be lifted, and catching one on the rim
+    spares the paper
+  - poi paper comes as No.4 (thick), No.5, or No.6 (thin)
 
-Clicking the pond never takes focus from the chat input. Hide the pond with
-its chevron to keep just a one-line breathing guide. On compact layouts the
-pond always shows as that one line. The pond honors reduced motion: the koi
-hold still and nothing animates.
+  Every koi you scoop rests in a floating wooden bowl for a moment and then
+  slips back into the pond. Leave the poi alone for a few seconds and it plays
+  by itself, so you can just watch.
+
+## The garden and the weather
+
+- A shoreline of grass and mossy stones, water that deepens away from the bank,
+  sunlight playing over the bed, and water plants swaying.
+- An overhanging tree that follows the season: sakura in spring, green in
+  summer, maple red in autumn, bare with snow in winter. Petals and leaves fall
+  from it and float away; fireflies come out on summer evenings.
+- A stone lantern on a rock in the shallows, lit from dusk to dawn and in the
+  rain, with its light on the water. The moon shows on clear nights.
+- Lily pads with lotus flowers in spring and summer.
+- Rain, if you like, with rings all over the water.
+- Sound, off until you turn it on: moving water, a wind chime in the
+  miyako-bushi scale, the odd knock of a shishi-odoshi, rain, and small sounds
+  for food and the poi.
+- A breathing guide (in for 4, hold for 2, out for 6), with a slow ring across
+  the pond on every in-breath.
+
+## The Zen Pond page
+
+- **Your koi.** Add up to nine koi from ten varieties (Kohaku, Tancho, Sanke,
+  Showa, Ogon, Yamabuki, Asagi, Chagoi, Shiro Utsuri, Kumonryu), name them, and
+  release them. Each koi's pattern is its own, and koi grow over their first
+  two weeks. The page counts how often each one has been scooped.
+- **Garden.** Lantern, tree, water plants, and none, few, or many lily pads.
+- **Ambience.** Season and time of day (auto or pinned), weather, sound and
+  volume, and the breathing guide.
+- **Above the chat input.** Show the pond while the agent works, always, or
+  only on the page.
+
+The strip's controls appear when you hover it: switch between watching and
+koi-sukui, sound, open the page, and hide the pond. Clicking the pond never
+takes focus from the chat input. The pond honors reduced motion.
 
 ## Install
 
@@ -48,19 +76,30 @@ bb plugin install .
 
 ```sh
 npm install
-npm test          # simulation tests (node:test)
+npm test          # simulation and koi-sukui tests (node:test)
 npm run typecheck
 bb plugin build
 bb plugin dev     # rebuild and reload on save
 ```
 
-`koi.ts` is the simulation, `scene.ts` draws it, `underwater.ts` floods the
-chat input, and `app.tsx` places the pond.
+| File                | What it does                                              |
+| ------------------- | --------------------------------------------------------- |
+| `config.ts`         | The saved pond: koi, garden, ambience, and defaults        |
+| `koi.ts`            | The simulation: koi, food, ripples, rain, falling petals   |
+| `sukui.ts`          | Koi-sukui: the poi, the paper, the bowl, and auto play     |
+| `scene.ts`          | The pixel-art painter, one pond world per set of canvases  |
+| `world.ts`          | Ties the config, simulation, painter, and poi together     |
+| `composer-water.ts` | The pond's continuation behind the chat input              |
+| `sound.ts`          | The soundscape, made with Web Audio                        |
+| `app.tsx`           | The strip above the chat input and the Zen Pond page       |
+| `server.ts`         | Stores the pond and scoop counts                           |
 
 ## Data
 
-Nothing leaves the browser. The hidden, breathing, and season preferences are
-stored in `localStorage`. The server entry is empty.
+Your koi, garden, and ambience are saved in the plugin's key-value storage on
+the bb server, so they follow you between the desktop app and the browser,
+along with how often each koi has been scooped. Sound settings and whether the
+strip is hidden stay in this browser.
 
 bb has no plugin API for placing UI next to the chat input. Zen Koi finds the
 chat input through bb's markup (`[data-app-composer]`,
