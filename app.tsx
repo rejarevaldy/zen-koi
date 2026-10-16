@@ -62,8 +62,6 @@ const PAGE_PATH = "pond";
 const SETTINGS_ACTION = "pond-settings";
 
 const FRAME_MS = 40;
-/** How much of a light page's background washes over the pond. */
-const LIGHT_WASH = 0.16;
 /** Under reduced motion nothing moves; the pond only redraws for changes. */
 const STILL_FRAME_MS = 500;
 /** Hidden or off-screen ponds rest instead of swimming unseen. */
@@ -458,9 +456,6 @@ function usePondLoop(options: LoopOptions): Hud {
     let last = performance.now();
     let lastBreath: BreathPhase | null = null;
     let hudNow = EMPTY_HUD;
-    // The page's scheme, rechecked now and then: light pages get a lighter pond.
-    let dark = false;
-    let schemeAt = -Infinity;
 
     const tick = () => {
       if (disposed) return;
@@ -525,17 +520,12 @@ function usePondLoop(options: LoopOptions): Hud {
         addRipple(world.pond, width / 2, (SHORE_ROWS + focusBottom) / 2 + 2, 16, 3);
       }
 
-      if (now - schemeAt >= 1_000) {
-        schemeAt = now;
-        dark = getComputedStyle(document.documentElement).colorScheme.includes("dark");
-      }
       let scrim: Scrim | null = null;
-      let paper = dark ? "#18181b" : "#ffffff";
       if (showWater) {
         const look = water.look(now);
-        paper = look.background;
-        // On a light page the chat input stays light, with the koi faint beneath the text.
-        scrim = { color: look.background, alpha: look.dark ? 0.4 : 0.72, start: rows - 12, full: rows };
+        // The water clears slowly from the strip into the chat input, so there is no seam,
+        // and stays pale on a light page with the koi still beneath the text.
+        scrim = { color: look.background, alpha: look.dark ? 0.4 : 0.6, start: rows - 14, full: rows + 10 };
       }
       if (showCanvas) {
         if (canvas.width !== width) canvas.width = width;
@@ -546,13 +536,6 @@ function usePondLoop(options: LoopOptions): Hud {
         const ctx = canvas.getContext("2d");
         if (ctx) {
           world.painter.paint(ctx, world.pond, env, now, { y0: 0, rows, scrim }, world.sukui);
-          if (!dark) {
-            // A soft wash of the page, so the pond sits lightly in a light theme.
-            ctx.globalAlpha = LIGHT_WASH;
-            ctx.fillStyle = paper;
-            ctx.fillRect(0, 0, width, rows);
-            ctx.globalAlpha = 1;
-          }
         }
       }
       if (showWater && waterSize) {
