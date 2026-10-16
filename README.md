@@ -3,7 +3,7 @@
 A quiet pixel-art koi pond for [bb](https://getbb.app). While your agent works,
 the pond sits above the chat input and your koi swim under the text you type.
 
-![Zen Koi above the chat input: a koi is scooped into the bowl](screenshots/showcase.gif)
+![Zen Koi: koi swim, a ! shows over the poi, and a koi is scooped into the bowl](screenshots/showcase.gif)
 
 ## Install
 
