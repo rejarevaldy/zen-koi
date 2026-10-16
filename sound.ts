@@ -2,9 +2,11 @@
 // in the miyako-bushi scale, the odd knock of a shishi-odoshi, rain when it
 // rains, and small sounds for food, the poi, and the bowl. Nothing plays until
 // the player turns sound on, and it fades out whenever no pond is in view. The
-// chime and the knock ring out in a soft reverb.
+// chime, the knock, and the odd raindrop ring out in a soft reverb.
 
 type Holder = symbol;
+
+const RAIN_LEVEL = 0.12;
 
 // Miyako-bushi: D, E flat, G, A, B flat.
 const CHIME_NOTES = [587.33, 622.25, 783.99, 880, 932.33, 1174.66];
@@ -17,7 +19,8 @@ class Ambience {
   #space: ConvolverNode | null = null;
   #enabled = false;
   #volume = 0.5;
-  #rain = false;
+  /** How hard it rains, 0 when clear. */
+  #rain = 0;
   #holders = new Set<Holder>();
   #timers: ReturnType<typeof setTimeout>[] = [];
   #playing = false;
@@ -30,11 +33,13 @@ class Ambience {
     this.#update();
   }
 
-  setRain(rain: boolean) {
-    this.#rain = rain;
+  /** Follows the rain: 0 when clear, up to 1 in a steady shower. */
+  setRain(amount: number) {
+    if (Math.abs(amount - this.#rain) < 0.02 && (amount === 0) === (this.#rain === 0)) return;
+    this.#rain = amount;
     const context = this.#context;
     if (context && this.#rainGain) {
-      this.#rainGain.gain.setTargetAtTime(rain ? 0.11 : 0, context.currentTime, 0.8);
+      this.#rainGain.gain.setTargetAtTime(RAIN_LEVEL * amount, context.currentTime, 1.5);
     }
   }
 
@@ -107,18 +112,18 @@ class Ambience {
     water.start();
     lfo.start();
 
-    // Rain: brighter noise, faded in only while it rains.
+    // Rain: a soft patter, faded in only while it rains and swelling with it.
     const rain = context.createBufferSource();
     rain.buffer = whiteNoise(context, 3);
     rain.loop = true;
     const high = context.createBiquadFilter();
     high.type = "highpass";
-    high.frequency.value = 1_400;
+    high.frequency.value = 700;
     const soft = context.createBiquadFilter();
     soft.type = "lowpass";
-    soft.frequency.value = 6_500;
+    soft.frequency.value = 3_800;
     const rainGain = context.createGain();
-    rainGain.gain.value = this.#rain ? 0.11 : 0;
+    rainGain.gain.value = RAIN_LEVEL * this.#rain;
     rain.connect(high).connect(soft).connect(rainGain).connect(master);
     rain.start();
     this.#rainGain = rainGain;
@@ -142,6 +147,7 @@ class Ambience {
     if (playing) {
       this.#schedule(() => this.#chime(), 6_000, 18_000);
       this.#schedule(() => this.#knock(), 25_000, 50_000);
+      this.#schedule(() => this.#drip(), 350, 1_400);
     }
   }
 
@@ -167,6 +173,25 @@ class Ambience {
       const note = CHIME_NOTES[Math.floor(Math.random() * CHIME_NOTES.length)]!;
       this.#bell(note, index * 0.32, 0.045);
     }
+  }
+
+  /** A single drop landing on the water, now and then while it rains. */
+  #drip() {
+    const context = this.#context;
+    const master = this.#master;
+    if (!context || !master || Math.random() > this.#rain * 0.8) return;
+    const start = context.currentTime;
+    const from = 1_700 + Math.random() * 900;
+    const tone = context.createOscillator();
+    tone.frequency.setValueAtTime(from, start);
+    tone.frequency.exponentialRampToValueAtTime(from * 0.6, start + 0.07);
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.012 * this.#rain, start);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.09);
+    tone.connect(gain).connect(master);
+    if (this.#space) gain.connect(this.#space);
+    tone.start(start);
+    tone.stop(start + 0.1);
   }
 
   /** The shishi-odoshi tipping over: a hollow bamboo knock. */

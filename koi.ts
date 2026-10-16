@@ -87,6 +87,8 @@ export type StepContext = {
   season: Season;
   timeOfDay: TimeOfDay;
   weather: Weather;
+  /** How hard it rains, 0.3 to 1; full rain if left out. */
+  rain?: number;
 };
 
 /** Food and floating things slide this way, very slowly. */
@@ -315,8 +317,8 @@ export function stepPond(pond: Pond, dtMs: number, context: StepContext) {
 
   if (context.weather === "rain") {
     pond.rainMs -= dtMs;
-    // Wider ponds catch more rain.
-    const interval = (90 * 260) / Math.max(80, pond.width * (pond.height / 32));
+    // Wider ponds catch more rain, and harder rain lands more often.
+    const interval = (90 * 260) / Math.max(80, pond.width * (pond.height / 32)) / (context.rain ?? 1);
     while (pond.rainMs <= 0) {
       pond.rainMs += interval * (0.4 + rng() * 1.2);
       addRipple(

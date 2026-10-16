@@ -165,6 +165,16 @@ export function resolveWeather(config: PondConfig, date: Date): Weather {
   return (mixSeed(config.layout.seed, spell) % 100) / 100 < 0.2 ? "rain" : "clear";
 }
 
+/**
+ * How hard it rains, from 0.3 (a drizzle) to 1 (a steady shower). It drifts
+ * slowly over a few minutes and is the same in every window at the same time.
+ */
+export function rainIntensity(timeMs: number): number {
+  const t = timeMs / 1000;
+  const level = 0.62 + 0.25 * Math.sin(t / 53) + 0.13 * Math.sin(t / 17.3 + 1.7);
+  return Math.max(0.3, Math.min(1, level));
+}
+
 function mixSeed(a: number, b: number): number {
   let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(b + 0x632be5ab, 0xc2b2ae35);
   h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);

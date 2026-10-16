@@ -26,6 +26,8 @@ export type Environment = {
   season: Season;
   time: TimeOfDay;
   weather: Weather;
+  /** How hard it rains right now: 0 when clear, else 0.3 to 1. */
+  rain: number;
   garden: PondConfig["garden"];
 };
 
@@ -649,7 +651,7 @@ export class PondPainter {
     drawRipples(ctx, pond, light.sparkle, y0, y1);
 
     if (env.time === "night" && env.weather === "clear") this.#paintMoon(ctx, light, now);
-    if (env.time === "day" || env.time === "dawn") this.#paintGlints(ctx, light, now, y0, y1);
+    if (clear && (env.time === "day" || env.time === "dawn")) this.#paintGlints(ctx, light, now, y0, y1);
     const lantern = this.#lantern;
     if (lantern) {
       const lit = env.time !== "day" || env.weather === "rain";
@@ -664,7 +666,7 @@ export class PondPainter {
 
     if (this.#canopy) ctx.drawImage(this.#canopy, 0, 0);
     drawDrifts(ctx, pond, now, false);
-    if (env.weather === "rain") paintRain(ctx, this.width, y0, y1, now);
+    if (env.weather === "rain") paintRain(ctx, this.width, this.height, y0, y1, now, env.rain, light.dimAmount);
     if (view.scrim) paintScrim(ctx, this.width, view.scrim, y0, y1);
     ctx.restore();
   }
@@ -1366,16 +1368,41 @@ function drawDrifts(ctx: CanvasRenderingContext2D, pond: Pond, now: number, floa
   ctx.globalAlpha = 1;
 }
 
-function paintRain(ctx: CanvasRenderingContext2D, width: number, y0: number, y1: number, now: number) {
-  const frame = Math.floor(now / 70);
-  const count = Math.floor((width * (y1 - y0)) / 90);
+/** Wind leans the rain: how far a drop moves left for each pixel it falls. */
+const RAIN_SLANT = 0.3;
+
+/**
+ * Rain as thin slanted streaks falling steadily across the whole pond, more of
+ * them as the rain picks up. Each drop keeps its own speed and starts each fall
+ * somewhere new, so the rain never repeats or flickers.
+ */
+function paintRain(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  y0: number,
+  y1: number,
+  now: number,
+  amount: number,
+  dim: number,
+) {
+  const t = now / 1000;
+  const span = height + 8;
+  const count = Math.round(((width * height) / 120) * amount);
+  const ink = 0.42 * (1 - dim * 0.5);
   ctx.fillStyle = "#dbe8f0";
-  ctx.globalAlpha = 0.32;
   for (let index = 0; index < count; index++) {
-    const x = Math.floor(hash(31, index, frame) * width);
-    const y = Math.floor(y0 + hash(32, index, frame) * (y1 - y0));
-    ctx.fillRect(x, y, 1, 1);
-    ctx.fillRect(x - 1, y - 1, 1, 1);
+    const speed = 30 + hash(33, index, 0) * 14;
+    const travel = hash(32, index, 0) * span + t * speed;
+    const fall = (travel % span) - 4;
+    const x0 = hash(31, index, Math.floor(travel / span)) * (width + span * RAIN_SLANT);
+    // Head first, then a fading tail up and to the right.
+    for (let k = 0; k < 4; k++) {
+      const y = Math.round(fall - k);
+      if (y < y0 || y >= y1) continue;
+      ctx.globalAlpha = ink * (1 - k * 0.27);
+      ctx.fillRect(Math.round(x0 - (fall - k) * RAIN_SLANT), y, 1, 1);
+    }
   }
   ctx.globalAlpha = 1;
 }

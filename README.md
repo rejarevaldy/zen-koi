@@ -36,7 +36,8 @@ It has its own art and code.
 - A stone lantern on a rock in the shallows, lit from dusk to dawn and in the
   rain, with its light on the water. The moon shows on clear nights.
 - Lily pads with lotus flowers in spring and summer.
-- Rain, if you like, with rings all over the water.
+- Rain, if you like, that drifts between a drizzle and a steady shower: thin
+  slanted streaks, rings on the water, a soft patter, and the odd drip.
 - Sound, off until you turn it on: moving water, a wind chime in the
   miyako-bushi scale, the odd knock of a shishi-odoshi, rain, and small sounds
   for food and the poi.

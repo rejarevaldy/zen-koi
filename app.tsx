@@ -514,7 +514,7 @@ function usePondLoop(options: LoopOptions): Hud {
       );
       const news = playEvents(events, config, onScoop);
       if (news) newsRef.current = news;
-      ambience.setRain(env.weather === "rain");
+      ambience.setRain(env.rain);
       if (breathing && breathTurned && breath.phase === "in" && !reducedMotion) {
         // Each in-breath sends one slow ring across the pond.
         addRipple(world.pond, width / 2, (SHORE_ROWS + focusBottom) / 2 + 2, 16, 3);

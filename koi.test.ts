@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { defaultConfig, koiLength, type KoiEntry } from "./config.ts";
+import { defaultConfig, koiLength, rainIntensity, type KoiEntry } from "./config.ts";
 import {
   BREATH_CYCLE_MS,
   BREATH_IN_MS,
@@ -115,4 +115,25 @@ test("the breath fills, holds, and empties", () => {
   assert.equal(breathAt(BREATH_CYCLE_MS - 1).phase, "out");
   assert.ok(breathAt(BREATH_CYCLE_MS - 1).fullness < 0.01);
   assert.equal(breathAt(BREATH_IN_MS + 1).fullness, 1);
+});
+
+test("rain drifts between a drizzle and a steady shower", () => {
+  const levels = Array.from({ length: 600 }, (_, i) => rainIntensity(i * 1_000));
+  assert.ok(levels.every((level) => level >= 0.3 && level <= 1));
+  assert.ok(Math.max(...levels) - Math.min(...levels) > 0.4, "it changes over ten minutes");
+});
+
+test("harder rain lands more rings on the water", () => {
+  const rings = (rain: number) => {
+    const rng = seededRng(9);
+    const pond = newPond(220, 32, 8, 32);
+    let count = 0;
+    for (let t = 0; t < 10_000; t += 33) {
+      const before = pond.ripples.length;
+      stepPond(pond, 33, { rng, season: "summer", timeOfDay: "day", weather: "rain", rain });
+      count += Math.max(0, pond.ripples.length - before);
+    }
+    return count;
+  };
+  assert.ok(rings(1) > rings(0.3) * 2);
 });
