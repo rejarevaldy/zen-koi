@@ -1391,7 +1391,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
           {settingsTab === "display" ? (
           <Section
             title="Catching koi"
-            description="Tap once to place the scoop, then tap when a koi appears over it."
+            description="The scoop moves by itself; tap when ! appears over it."
           >
             <Row label="Poi paper" hint="Higher numbers are thinner, like at a real stall.">
               <Segmented<PoiGrade>
