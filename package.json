@@ -11,6 +11,11 @@
     "calm"
   ],
   "license": "MIT",
+  "homepage": "https://github.com/rejarevaldy/zen-koi#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rejarevaldy/zen-koi.git"
+  },
   "type": "module",
   "files": [
     "dist",
@@ -21,7 +26,8 @@
     "composer-dom.ts",
     "underwater.ts",
     "assets",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "bb plugin build",

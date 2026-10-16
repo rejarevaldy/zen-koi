@@ -34,7 +34,11 @@ hold still and nothing animates.
 
 ## Install
 
-From this directory:
+```sh
+bb plugin install git:https://github.com/rejarevaldy/zen-koi.git
+```
+
+Or from a local checkout:
 
 ```sh
 bb plugin install .
