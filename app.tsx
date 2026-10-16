@@ -1196,7 +1196,7 @@ function AddKoi({ config, onAdd }: { config: PondConfig; onAdd: (entry: KoiEntry
           New patterns
         </button>
       </div>
-      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-1.5">
         {VARIETIES.map((option) => (
           <button
             key={option}
@@ -1332,13 +1332,13 @@ function ZenPondPage() {
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-4">
           <Section
             title="Your koi"
             description="Koi grow over their first two weeks. Released koi swim off for good."
-            className="md:col-span-2"
+            className="col-span-full"
           >
-            <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <ul className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-2">
               {config.koi.map((entry) => (
                 <KoiCard
                   key={entry.id}
