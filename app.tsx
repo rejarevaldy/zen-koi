@@ -1137,80 +1137,48 @@ function KoiCard({
 }
 
 function AddKoi({ config, onAdd }: { config: PondConfig; onAdd: (entry: KoiEntry) => void }) {
-  const [id, setId] = useState(newKoiId);
-  const [variety, setVariety] = useState<VarietyId>("kohaku");
+  const [drawn, setDrawn] = useState<KoiEntry | null>(null);
   const taken = new Set(config.koi.map((entry) => entry.name));
-  const suggestion = KOI_NAMES.find((candidate) => !taken.has(candidate)) ?? "Koi";
-  const [name, setName] = useState("");
   const full = config.koi.length >= MAX_KOI;
-  const add = () => {
-    onAdd({ id, variety, name: (name.trim() || suggestion).slice(0, NAME_MAX), addedAt: Date.now() });
-    setId(newKoiId());
-    setName("");
-  };
-  const surprise = () => {
-    setId(newKoiId());
-    setVariety(VARIETIES[Math.floor(Math.random() * VARIETIES.length)]!);
+  const draw = () => {
+    const names = KOI_NAMES.filter((name) => !taken.has(name));
+    setDrawn({
+      id: newKoiId(),
+      variety: VARIETIES[Math.floor(Math.random() * VARIETIES.length)]!,
+      name: names[Math.floor(Math.random() * names.length)] ?? "Koi",
+      addedAt: Date.now(),
+    });
   };
   return (
     <div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span>
-          {full
-            ? `The pond is full at ${MAX_KOI} koi. Release one to make room.`
-            : "Every koi's pattern is its own. This is how yours will look."}
-        </span>
-        <button
-          type="button"
-          disabled={full}
-          onClick={surprise}
-          className="rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:opacity-40"
-        >
-          New patterns
-        </button>
-      </div>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-1.5">
-        {VARIETIES.map((option) => (
+      <p className="text-xs text-muted-foreground">
+        {full ? `The pond is full at ${MAX_KOI} koi. Release one to make room.` : "A free draw gives you a random koi and pattern. You can rename it after keeping it."}
+      </p>
+      {drawn ? (
+        <div aria-live="polite" className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-background p-2">
+          <KoiPortrait id={drawn.id} variety={drawn.variety} length={9} />
+          <div className="min-w-0 flex-1 text-xs text-foreground">
+            <div className="font-medium">{drawn.name}</div>
+            <div className="text-muted-foreground">{VARIETY_INFO[drawn.variety].name}</div>
+          </div>
           <button
-            key={option}
             type="button"
             disabled={full}
-            aria-pressed={option === variety}
-            title={VARIETY_INFO[option].blurb}
-            onClick={() => setVariety(option)}
-            className={`flex flex-col items-center gap-1 rounded-lg border p-1.5 text-[11px] transition-colors disabled:opacity-40 ${
-              option === variety
-                ? "border-primary bg-background text-foreground"
-                : "border-transparent text-muted-foreground hover:bg-background"
-            }`}
+            onClick={() => { onAdd(drawn); setDrawn(null); }}
+            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-40"
           >
-            <KoiPortrait id={id} variety={option} length={9} />
-            {VARIETY_INFO[option].name}
+            Keep koi
           </button>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <input
-          value={name}
-          disabled={full}
-          maxLength={NAME_MAX}
-          placeholder={suggestion}
-          aria-label="New koi's name"
-          onChange={(event) => setName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !full) add();
-          }}
-          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm outline-none focus:border-primary"
-        />
-        <button
-          type="button"
-          disabled={full}
-          onClick={add}
-          className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
-        >
-          Add to the pond
-        </button>
-      </div>
+        </div>
+      ) : null}
+      <button
+        type="button"
+        disabled={full}
+        onClick={draw}
+        className="self-start rounded-md bg-muted px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-background disabled:opacity-40"
+      >
+        {drawn ? "Draw again" : "Draw a koi"}
+      </button>
     </div>
   );
 }
@@ -1342,7 +1310,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
               ))}
             </ul>
             <details className="rounded-lg border border-border/60">
-              <summary className="cursor-pointer px-3 py-2 text-xs text-foreground">Add koi</summary>
+              <summary className="cursor-pointer px-3 py-2 text-xs text-foreground">Draw a koi</summary>
               <div className="p-2 pt-0">
                 <AddKoi config={config} onAdd={(entry) => update({ koi: [...config.koi, entry] })} />
               </div>
