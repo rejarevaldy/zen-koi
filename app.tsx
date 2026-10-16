@@ -333,6 +333,9 @@ function sameHud(a: Hud, b: Hud): boolean {
 
 type News = { text: string; until: number };
 
+/** The strip's small glassy pills, top right. */
+const PILL = "flex h-8 items-center gap-0.5 rounded-lg bg-black/40 p-0.5 shadow-sm backdrop-blur-sm";
+
 const CATCH_HINT = "Koi pond. The poi moves by itself; tap, or press Space or Enter, when a ! shows over it to scoop.";
 
 function koiName(config: PondConfig, id: string): string {
@@ -364,7 +367,7 @@ function playEvents(
         news = { text: "Koi swam away", until };
         break;
       case "early":
-        news = { text: "Too soon, wait for !", until };
+        news = { text: "Too soon", until };
         break;
       case "torn":
         ambience.tear();
@@ -693,7 +696,7 @@ function CatchHud({ hud, grade }: { hud: Hud; grade: PoiGrade }) {
 function CatchStatus({ hud, grade }: { hud: Hud; grade: PoiGrade }) {
   if (hud.status === null || hud.paper === null) return null;
   return (
-    <span className={`rounded-md px-1.5 py-0.5 whitespace-nowrap ${hud.bite ? "bg-amber-500/80 text-black" : ""}`}>
+    <span className={`min-w-24 rounded-md px-1.5 py-1 text-center whitespace-nowrap ${hud.bite ? "bg-amber-500/80 text-black" : ""}`}>
       <span className="sr-only">No.{grade} paper: {hud.paper * 10}% left.</span>
       <span aria-live="polite">{hud.status}</span>
     </span>
@@ -931,20 +934,11 @@ function ThreadPond({
         >
           <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
         </div>
-        {/* One group: the catch status stays in view; the controls show on hover or keyboard focus. */}
-        <div
-          className={`absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5 text-[11px] text-white/90 shadow-sm backdrop-blur-sm transition-opacity duration-300 ${
-            view === "catch" || summary
-              ? ""
-              : "pointer-events-none opacity-0 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
-          }`}
-        >
-          {view === "catch" ? (
-            <CatchStatus hud={hud} grade={config.poi} />
-          ) : summary ? (
-            <CatchSummary session={summary} config={config} onDismiss={dismissSummary} />
-          ) : null}
-          <div className="hidden items-center gap-0.5 group-focus-within:flex group-hover:flex">
+        {/* One group at the top right. Its controls fade in only while this corner is
+            hovered or the pond has keyboard focus, and always keep their place, so the
+            status beside them never jumps. */}
+        <div className="group/bar absolute top-1.5 right-1.5 flex items-center gap-1 text-[11px] text-white/90">
+          <div className={`${PILL} pointer-events-none opacity-0 transition-opacity duration-300 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover/bar:pointer-events-auto group-hover/bar:opacity-100`}>
             <div role="group" aria-label="What the pond shows" className="flex items-center">
               {(["pond", "catch"] as const).map((option) => (
                 <button
@@ -963,6 +957,19 @@ function ThreadPond({
             <IconButton label="Open pond settings" icon="Settings" onClick={openSettings} />
             <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
           </div>
+          {view === "catch" ? (
+            <div className={PILL}>
+              <CatchStatus hud={hud} grade={config.poi} />
+            </div>
+          ) : summary ? (
+            <div className={PILL}>
+              <CatchSummary session={summary} config={config} onDismiss={dismissSummary} />
+            </div>
+          ) : (
+            <div className={`${PILL} w-8 justify-center opacity-60 transition-opacity group-hover/bar:opacity-100`}>
+              <Icon name={KOI_ICON} className="size-3.5" aria-hidden />
+            </div>
+          )}
         </div>
         {hud.breath ? (
           <div className="pointer-events-none absolute bottom-1.5 left-1.5">
