@@ -4,7 +4,7 @@
 // own band of rows from it, so the water runs on from one into the next.
 
 import { bodyPoint, seededRng, type Drift, type Koi, type Pond, type Region } from "./koi.ts";
-import { POI_RADIUS, type Sukui } from "./sukui.ts";
+import { BITE_MS, POI_RADIUS, type Sukui } from "./sukui.ts";
 import type { PondConfig, Season, TimeOfDay, Weather } from "./config.ts";
 
 /** CSS pixels per pond pixel. */
@@ -19,6 +19,8 @@ const LANTERN_MIN_WIDTH = 110;
 const WORLD_SEED = 20_241;
 
 export type Environment = {
+  /** The pond's shape: shoreline, stones, pads, plants, and which side the tree is on. */
+  seed: number;
   season: Season;
   time: TimeOfDay;
   weather: Weather;
@@ -507,6 +509,8 @@ export class PondPainter {
   #lantern: { x: number; y: number } | null = null;
   #light: Light = LIGHT.day;
   #land: Land = LAND.spring;
+  #seed = WORLD_SEED;
+  #treeRight = false;
   /** Where the tree hangs over the water; petals fall from here. */
   canopy: Region | null = null;
 
@@ -514,6 +518,7 @@ export class PondPainter {
   layout(width: number, height: number, focusBottom: number, env: Environment) {
     const garden = env.garden;
     const key = [
+      env.seed,
       width,
       height,
       focusBottom,
@@ -531,17 +536,23 @@ export class PondPainter {
     this.height = height;
     this.#light = lightFor(env);
     this.#land = LAND[env.season];
-    this.#shore = shoreLine(width);
+    this.#seed = env.seed >>> 0;
+    // The tree and the lantern take opposite sides, chosen by the seed.
+    this.#treeRight = (this.#seed & 1) === 1;
+    this.#shore = shoreLine(width, this.#seed);
+    const lanternX = this.#treeRight ? 18 + (this.#seed % 13) : width - 30 - (this.#seed % 13);
     this.#lantern =
       garden.lantern && width >= LANTERN_MIN_WIDTH
-        ? { x: width - 30, y: this.#shore[width - 27]! + 3 }
+        ? { x: lanternX, y: this.#shore[clampInt(lanternX + 3, 0, width)]! + 3 }
         : null;
     this.#base = this.#paintBase();
     this.#pads = this.#paintPads(garden.lilies, focusBottom);
-    this.#plants = garden.plants ? plantsFor(width, height) : [];
+    this.#plants = garden.plants ? plantsFor(width, height, this.#seed) : [];
     if (garden.tree) {
-      const reach = Math.min(72, Math.round(width * 0.3));
-      this.canopy = { x0: 0, x1: reach, y0: 0, y1: 13 };
+      const reach = Math.min(72, Math.round(width * (0.24 + ((this.#seed >>> 3) % 10) / 100)));
+      this.canopy = this.#treeRight
+        ? { x0: width - reach, x1: width, y0: 0, y1: 13 }
+        : { x0: 0, x1: reach, y0: 0, y1: 13 };
       [this.#canopy, this.#canopyShade] = this.#paintCanopy(reach);
     } else {
       this.canopy = null;
@@ -637,11 +648,11 @@ export class PondPainter {
         const edge = shore[x]!;
         if (y < edge) continue;
         const fromShore = y - edge;
-        const bed = noise(WORLD_SEED, x * 0.05, y * 0.09) - 0.5;
+        const bed = noise(this.#seed, x * 0.05, y * 0.09) - 0.5;
         const depth = Math.min(1, fromShore / DEPTH_RANGE) + bed * 0.32;
         const level = clampInt(depth * 5 + bayer(x, y) - 0.5, 0, 5);
         let color = light.water[level]!;
-        const grain = hash(WORLD_SEED + 1, x, y);
+        const grain = hash(this.#seed + 1, x, y);
         if (fromShore < 3 && grain > 0.8) color = mix(color, dimmed(SAND), 0.4);
         else if (grain > 0.965) color = light.water[Math.max(0, level - 1)]!;
         // The bank's shade on the water right below it.
@@ -656,14 +667,14 @@ export class PondPainter {
     for (let x = 0; x < width; x++) {
       const edge = shore[x]!;
       for (let y = 0; y < edge; y++) {
-        const patch = noise(WORLD_SEED + 2, x * 0.18, y * 0.35);
+        const patch = noise(this.#seed + 2, x * 0.18, y * 0.35);
         let color =
           patch + bayer(x, y) * 0.3 > 0.72 ? grassLight : patch < 0.35 ? grassDark : grass;
         if (y === edge - 1) color = dimmed(land.edge);
         plot(ctx, x, y, color);
       }
     }
-    const rng = seededRng(WORLD_SEED + width);
+    const rng = seededRng(this.#seed + width);
     for (let index = 0; index < width / 5; index++) {
       const x = Math.floor(rng() * width);
       const y = Math.floor(rng() * Math.max(1, shore[x]! - 2));
@@ -697,7 +708,7 @@ export class PondPainter {
           let color = stone;
           if (dx + dy < -0.55) color = cap ?? stoneLight;
           else if (dx + dy > 0.6 || d > 0.82) color = stoneDark;
-          if (!cap && dy < -0.2 && noise(WORLD_SEED + 3, px * 0.6, py * 0.6) > 0.66) {
+          if (!cap && dy < -0.2 && noise(this.#seed + 3, px * 0.6, py * 0.6) > 0.66) {
             color = dimmed(land.edge);
           }
           plot(ctx, px, py, color);
@@ -723,7 +734,7 @@ export class PondPainter {
     const light = this.#light;
     const land = this.#land;
     const dimmed = (color: string) => mix(color, light.dim, light.dimAmount);
-    const rng = seededRng(WORLD_SEED + 7 + width);
+    const rng = seededRng(this.#seed + 7 + width);
     const per = amount === "many" ? 38 : 75;
     const count = Math.max(2, Math.round(width / per));
     const bottom = Math.min(height - 4, Math.max(SHORE_ROWS + 8, focusBottom + 6));
@@ -785,7 +796,9 @@ export class PondPainter {
     const light = this.#light;
     const land = this.#land;
     const dimmed = (color: string) => mix(color, light.dim, light.dimAmount);
-    const rng = seededRng(WORLD_SEED + 11);
+    const rng = seededRng(this.#seed + 11);
+    // Drawn reaching in from the left, then mirrored when the tree stands on the right.
+    const flip = (x: number) => (this.#treeRight ? width - 1 - x : x);
 
     // A main bough reaching in from the corner, with a few twigs off it.
     const main: { x: number; y: number }[] = [];
@@ -818,7 +831,8 @@ export class PondPainter {
     }
     // The tree's shadow on the water, offset as if lit from the upper left.
     const shadow = (x: number, y: number) => {
-      if (x + 5 < width && y + 5 < height) plot(shadeCtx, x + 5, y + 5, light.shade);
+      const sx = flip(x) + 5;
+      if (sx >= 0 && sx < width && y + 5 < height) plot(shadeCtx, sx, y + 5, light.shade);
     };
     const branch = dimmed(land.branch);
     for (const path of boughs) {
@@ -827,9 +841,9 @@ export class PondPainter {
           const x = Math.round(point.x);
           const y = Math.round(point.y) + dy;
           if (x < 0 || y < 0) continue;
-          plot(ctx, x, y, branch);
+          plot(ctx, flip(x), y, branch);
           shadow(x, y);
-          if (land.cap && dy === 0 && y > 0) plot(ctx, x, y - 1, dimmed(land.cap));
+          if (land.cap && dy === 0 && y > 0) plot(ctx, flip(x), y - 1, dimmed(land.cap));
         }
       }
     }
@@ -843,10 +857,11 @@ export class PondPainter {
           const dy = py + 0.5 - cluster.y;
           const d = Math.hypot(dx, dy) / r;
           // Ragged edges: leaves, not a ball.
-          if (d > 1 || (d > 0.7 && hash(WORLD_SEED + 13, px, py) > 0.55)) continue;
-          // Lit from the upper left.
-          const lit = 0.5 - (dx + dy) / (r * 2.5) + (bayer(px, py) - 0.5) * 0.5;
-          plot(ctx, px, py, tones[clampInt((1 - lit) * (tones.length - 1), 0, tones.length - 1)]!);
+          if (d > 1 || (d > 0.7 && hash(this.#seed + 13, px, py) > 0.55)) continue;
+          // Lit from the upper left, whichever side the tree is on.
+          const lx = this.#treeRight ? -dx : dx;
+          const lit = 0.5 - (lx + dy) / (r * 2.5) + (bayer(px, py) - 0.5) * 0.5;
+          plot(ctx, flip(px), py, tones[clampInt((1 - lit) * (tones.length - 1), 0, tones.length - 1)]!);
           shadow(px, py);
         }
       }
@@ -899,12 +914,14 @@ export class PondPainter {
     const canopy = this.canopy;
     if (!canopy) return;
     const t = now / 1000;
-    const reach = canopy.x1 * 1.6;
+    const reach = (canopy.x1 - canopy.x0) * 1.6;
     ctx.fillStyle = light.shade;
     ctx.globalAlpha = 0.14;
     for (let y = Math.max(SHORE_ROWS, y0); y < Math.min(this.height, y1, 34); y++) {
-      for (let x = 0; x < Math.min(this.width, reach); x++) {
-        const fade = x / reach + y / 34;
+      for (let x = 0; x < this.width; x++) {
+        const fromTree = this.#treeRight ? this.width - 1 - x : x;
+        if (fromTree >= reach) continue;
+        const fade = fromTree / reach + y / 34;
         const n = noise(
           WORLD_SEED + 17,
           x * 0.16 + Math.sin(t * 0.35) * 0.7,
@@ -976,17 +993,17 @@ function lightFor(env: Environment): Light {
   };
 }
 
-function shoreLine(width: number): Int16Array {
+function shoreLine(width: number, seed: number): Int16Array {
   const shore = new Int16Array(width + 1);
   for (let x = 0; x <= width; x++) {
-    const n = noise(WORLD_SEED + 5, x * 0.07, 0) * 3.4 + noise(WORLD_SEED + 6, x * 0.23, 0) * 1.4;
+    const n = noise(seed + 5, x * 0.07, 0) * 3.4 + noise(seed + 6, x * 0.23, 0) * 1.4;
     shore[x] = clampInt(2.6 + n, 3, SHORE_ROWS - 1);
   }
   return shore;
 }
 
-function plantsFor(width: number, height: number): Plant[] {
-  const rng = seededRng(WORLD_SEED + 23 + width);
+function plantsFor(width: number, height: number, seed: number): Plant[] {
+  const rng = seededRng(seed + 23 + width);
   const plants: Plant[] = [];
   const count = Math.round((width * Math.max(0, height - SHORE_ROWS - 12)) / 700);
   for (let index = 0; index < count; index++) {
@@ -1173,6 +1190,7 @@ function paintPoi(ctx: CanvasRenderingContext2D, sukui: Sukui, light: Light, now
       plot(ctx, x, y, dimmed(POI.paper));
     }
   }
+  if (sukui.phase.kind === "bite") paintBiteMark(ctx, cx, cy - r - 4, sukui.phase.ms, now);
   if (under) {
     // The water closing over the hoop.
     const pulse = (now / 900) % 1;
@@ -1184,6 +1202,23 @@ function paintPoi(ctx: CanvasRenderingContext2D, sukui: Sukui, light: Light, now
       ctx.fillRect(Math.round(cx + Math.cos(angle) * ring), Math.round(cy + Math.sin(angle) * ring * 0.85), 1, 1);
     }
   }
+  ctx.globalAlpha = 1;
+}
+
+/** A bobbing "!" over the poi while a koi is right above it: the moment to tap. */
+function paintBiteMark(ctx: CanvasRenderingContext2D, cx: number, top: number, ms: number, now: number) {
+  const x = Math.round(cx);
+  const y = Math.round(top + Math.sin(now * 0.02) * 0.6) - (ms < 120 ? 1 : 0);
+  const shape = [" O ", "OWO", "OWO", "OWO", " O ", "OWO", " O "];
+  // Fades as the moment passes.
+  const fade = 1 - Math.max(0, ms - BITE_MS * 0.6) / (BITE_MS * 0.4);
+  shape.forEach((row, dy) => {
+    [...row].forEach((cell, dx) => {
+      if (cell === " ") return;
+      ctx.globalAlpha = Math.max(0, fade);
+      plot(ctx, x - 1 + dx, y + dy - 7, cell === "W" ? "#ffffff" : "#20262c");
+    });
+  });
   ctx.globalAlpha = 1;
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-zen-koi",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "A quiet pixel-art koi pond above the chat input while the thread's agent works.",
   "keywords": [
@@ -35,7 +35,7 @@
   ],
   "scripts": {
     "build": "bb plugin build",
-    "test": "node --experimental-strip-types --no-warnings --test koi.test.ts sukui.test.ts",
+    "test": "node --experimental-strip-types --no-warnings --test koi.test.ts sukui.test.ts server.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "engines": {
@@ -49,8 +49,6 @@
       "icon": "./assets/koi.svg",
       "experimental_icons": {
         "koi": "./assets/koi.svg",
-        "breath": "./assets/breath.svg",
-        "poi": "./assets/poi.svg",
         "sound": "./assets/sound.svg",
         "expand": "./assets/expand.svg"
       }

@@ -1,8 +1,7 @@
 // One pond world as the app runs it: the koi, the painter that draws them,
-// and the poi when the player is playing koi-sukui. The strip and the pond
-// page each own one.
+// and the poi while the view is "catch". The strip and the pond page each own one.
 
-import { resolveSeason, resolveTime, type PondConfig } from "./config.ts";
+import { layoutSeed, resolveSeason, resolveTime, resolveWeather, type PondConfig, type View } from "./config.ts";
 import { newPond, resizePond, stepPond, syncKoi, type Pond } from "./koi.ts";
 import { PondPainter, SHORE_ROWS, STRIP_ROWS, type Environment } from "./scene.ts";
 import { fitSukui, newSukui, releaseAll, stepSukui, type Sukui, type SukuiEvent } from "./sukui.ts";
@@ -15,9 +14,10 @@ export function createWorld(): World {
 
 export function environmentFor(config: PondConfig, date: Date): Environment {
   return {
+    seed: layoutSeed(config, date),
     season: resolveSeason(config, date),
     time: resolveTime(config, date),
-    weather: config.ambience.weather,
+    weather: resolveWeather(config, date),
     garden: config.garden,
   };
 }
@@ -32,6 +32,7 @@ export function advanceWorld(
   env: Environment,
   dtMs: number,
   still: boolean,
+  view: View,
 ): SukuiEvent[] {
   const { pond, painter } = world;
   const events: SukuiEvent[] = [];
@@ -40,7 +41,7 @@ export function advanceWorld(
   pond.canopy = painter.canopy;
   syncKoi(pond, config.koi, Date.now(), Math.random);
 
-  if (config.activity === "sukui") {
+  if (view === "catch") {
     world.sukui ??= newSukui(config.poi, pond, size.focusBottom);
     world.sukui.grade = config.poi;
     fitSukui(world.sukui, pond, size.focusBottom);

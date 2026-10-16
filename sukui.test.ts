@@ -1,98 +1,124 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defaultConfig } from "./config.ts";
-import { bodyPoint, newPond, placeKoi, seededRng, stepPond, syncKoi, type Pond } from "./koi.ts";
-import { aim, BOWL_MS, dip, lift, newSukui, releaseAll, stepSukui, type Sukui } from "./sukui.ts";
+import { newPond, seededRng, stepPond, syncKoi, type Pond } from "./koi.ts";
+import {
+  BITE_MS,
+  BOWL_MS,
+  isAuto,
+  newSukui,
+  releaseAll,
+  stepSukui,
+  tap,
+  tapAt,
+  type Sukui,
+  type SukuiEvent,
+} from "./sukui.ts";
 
 const DAY = 86_400_000;
 
 function setup(seed: number): { pond: Pond; sukui: Sukui; rng: () => number } {
   const rng = seededRng(seed);
-  const pond = newPond(200, 32, 8, 32);
+  const pond = newPond(220, 32, 8, 32);
   syncKoi(pond, defaultConfig(0).koi, 20 * DAY, rng);
   const sukui = newSukui("4", pond, 32);
   return { pond, sukui, rng };
 }
 
-/** Puts the first koi right under the poi, near the surface. */
-function koiUnderPoi(pond: Pond, sukui: Sukui) {
-  const koi = pond.koi[0]!;
-  // Facing left, so the body trails off to the right of the head.
-  placeKoi(koi, sukui.x - koi.length * 0.35, sukui.y, Math.PI);
-  koi.depth = 0.1;
-  const middle = bodyPoint(koi, koi.length * 0.35);
-  assert.ok(Math.hypot(middle.x - sukui.x, middle.y - sukui.y) < 1);
-  return koi;
+/** Runs the pond and the poi together until `until` says stop, or time runs out. */
+function run(
+  pond: Pond,
+  sukui: Sukui,
+  rng: () => number,
+  ms: number,
+  until: (events: SukuiEvent[]) => boolean = () => false,
+): SukuiEvent[] {
+  const all: SukuiEvent[] = [];
+  for (let t = 0; t < ms; t += 33) {
+    stepPond(pond, 33, { rng, season: "summer", timeOfDay: "day", weather: "clear" });
+    const events = stepSukui(sukui, pond, 33, rng);
+    all.push(...events);
+    if (until(events)) break;
+  }
+  return all;
 }
 
-test("a slow dip and lift scoops the koi into the bowl, and it comes back", () => {
+test("left alone, the poi plays by itself and scoops koi", () => {
   const { pond, sukui, rng } = setup(1);
-  aim(sukui, sukui.x, sukui.y);
-  const koi = koiUnderPoi(pond, sukui);
-  dip(sukui, pond);
-  const events = lift(sukui, pond, rng);
-  assert.deepEqual(events, [{ type: "scooped", koiId: koi.id, auto: false }]);
-  assert.equal(koi.away, true);
-  assert.ok(sukui.paper > 0 && sukui.paper < 1);
-
-  const released = [];
-  for (let ms = 0; ms <= BOWL_MS + 100; ms += 100) released.push(...stepSukui(sukui, pond, 100, rng));
-  assert.ok(released.some((event) => event.type === "released" && event.koiId === koi.id));
-  assert.equal(koi.away, false);
+  assert.equal(isAuto(sukui), true);
+  const events = run(pond, sukui, rng, 240_000, (batch) => batch.some((e) => e.type === "scooped"));
+  assert.ok(events.some((event) => event.type === "dip"));
+  assert.ok(events.some((event) => event.type === "scooped" && event.auto));
 });
 
-test("koi deep in the water cannot be lifted", () => {
+test("the player taps when a koi is over the poi, and scoops it", () => {
   const { pond, sukui, rng } = setup(2);
-  const koi = koiUnderPoi(pond, sukui);
-  koi.depth = 0.8;
-  dip(sukui, pond);
-  assert.deepEqual(lift(sukui, pond, rng), [{ type: "missed" }]);
+  // Take the poi: it stops playing by itself and waits where it was tapped.
+  tapAt(sukui, pond, 100, 20, rng);
+  assert.equal(isAuto(sukui), false);
+  let bite: SukuiEvent | undefined;
+  run(pond, sukui, rng, 120_000, (batch) => {
+    bite = batch.find((event) => event.type === "bite");
+    // Keep the poi in the player's hands while waiting.
+    sukui.playerMs = 0;
+    return bite !== undefined;
+  });
+  assert.ok(bite, "a koi came over the poi");
+  const events = tap(sukui, pond, rng);
+  assert.equal(events[0]?.type, "scooped");
+  const koiId = (events[0] as { koiId: string }).koiId;
+  assert.equal(pond.koi.find((koi) => koi.id === koiId)?.away, true);
+
+  // It goes back to the pond after a while.
+  const later = run(pond, sukui, rng, BOWL_MS + 1_000, (batch) => {
+    sukui.playerMs = 0;
+    return batch.some((event) => event.type === "released");
+  });
+  assert.ok(later.some((event) => event.type === "released" && event.koiId === koiId));
+  assert.equal(pond.koi.find((koi) => koi.id === koiId)?.away, false);
 });
 
-test("a splashy entry costs paper, and thin paper tears sooner", () => {
-  const { pond, sukui } = setup(3);
-  sukui.speed = 40;
-  dip(sukui, pond);
-  const thick = sukui.paper;
-
-  const thin = setup(3);
-  thin.sukui.grade = "6";
-  thin.sukui.speed = 40;
-  dip(thin.sukui, thin.pond);
-  assert.ok(thick < 1);
-  assert.ok(thin.sukui.paper < thick);
+test("waiting too long lets the koi swim off", () => {
+  const { pond, sukui, rng } = setup(3);
+  tapAt(sukui, pond, 100, 20, rng);
+  run(pond, sukui, rng, 120_000, (batch) => {
+    sukui.playerMs = 0;
+    return batch.some((event) => event.type === "bite");
+  });
+  assert.equal(sukui.phase.kind, "bite");
+  const events = run(pond, sukui, rng, BITE_MS + 200, () => {
+    sukui.playerMs = 0;
+    return false;
+  });
+  assert.ok(events.some((event) => event.type === "missed"));
+  assert.equal(sukui.phase.kind, "waiting");
 });
 
-test("paper left in the water wears through, then a fresh poi comes", () => {
+test("wet paper wears through, then a fresh poi comes", () => {
   const { pond, sukui, rng } = setup(4);
-  aim(sukui, sukui.x, sukui.y);
-  dip(sukui, pond);
-  const events = [];
-  for (let ms = 0; ms < 60_000 && !sukui.torn; ms += 100) events.push(...stepSukui(sukui, pond, 100, rng));
+  sukui.grade = "6";
+  tapAt(sukui, pond, 100, 20, rng);
+  // Koi are kept away, so the poi just soaks.
+  for (const koi of pond.koi) koi.away = true;
+  const events = run(pond, sukui, rng, 120_000, (batch) => {
+    sukui.playerMs = 0;
+    return batch.some((event) => event.type === "torn");
+  });
   assert.ok(events.some((event) => event.type === "torn"));
-  for (let ms = 0; ms < 3_000; ms += 100) stepSukui(sukui, pond, 100, rng);
+  run(pond, sukui, rng, 3_000, () => {
+    sukui.playerMs = 0;
+    return false;
+  });
+  // A fresh poi, already back in the water and only just wet.
   assert.equal(sukui.torn, false);
-  assert.equal(sukui.paper, 1);
-});
-
-test("left alone, the poi plays by itself and scoops", () => {
-  const { pond, sukui, rng } = setup(5);
-  let scooped = false;
-  for (let ms = 0; ms < 180_000 && !scooped; ms += 33) {
-    stepPond(pond, 33, { rng, season: "summer", timeOfDay: "day", weather: "clear" });
-    scooped = stepSukui(sukui, pond, 33, rng).some((event) => event.type === "scooped");
-  }
-  assert.ok(scooped);
+  assert.ok(sukui.paper > 0.9);
 });
 
 test("stopping play lets every koi out of the bowl", () => {
-  const { pond, sukui, rng } = setup(6);
-  aim(sukui, sukui.x, sukui.y);
-  const koi = koiUnderPoi(pond, sukui);
-  dip(sukui, pond);
-  lift(sukui, pond, rng);
-  assert.equal(koi.away, true);
+  const { pond, sukui, rng } = setup(5);
+  run(pond, sukui, rng, 240_000, (batch) => batch.some((e) => e.type === "scooped"));
+  assert.ok(sukui.bowl.length > 0);
   releaseAll(sukui, pond, rng);
-  assert.equal(koi.away, false);
   assert.equal(sukui.bowl.length, 0);
+  assert.ok(pond.koi.every((koi) => !koi.away));
 });

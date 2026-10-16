@@ -48,3 +48,9 @@ export function squareComposerTop(from: Element): (() => void) | null {
     surface.style.borderTopColor = borderTopColor;
   };
 }
+
+/** The chat input's border color, so the pond's own border matches it. */
+export function composerBorderColor(from: Element): string | null {
+  const surface = findComposerSurface(from);
+  return surface ? getComputedStyle(surface).borderLeftColor : null;
+}

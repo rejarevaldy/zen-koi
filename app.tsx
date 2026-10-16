@@ -27,27 +27,29 @@ import {
   koiLength,
   MAX_KOI,
   NAME_MAX,
+  newSeed,
   POND_CHANNEL,
   resolveSeason,
   resolveTime,
+  resolveWeather,
   SEASONS,
   TIMES,
   VARIETIES,
   VARIETY_INFO,
-  type Activity,
+  type IdleView,
   type KoiEntry,
   type LilyAmount,
   type PoiGrade,
   type PondConfig,
-  type ShowMode,
   type VarietyId,
-  type Weather,
+  type View,
+  type WeatherChoice,
 } from "./config.ts";
 import { addRipple, attend, breathAt, dropFood, portraitKoi, type BreathPhase } from "./koi.ts";
 import { drawKoiPortrait, PIXEL_SCALE, SHORE_ROWS, STRIP_ROWS, type Scrim } from "./scene.ts";
-import { aim, dip, IDLE_TO_AUTO_MS, lift, type SukuiEvent } from "./sukui.ts";
+import { isAuto, tap, tapAt, type Sukui, type SukuiEvent } from "./sukui.ts";
 import { advanceWorld, createWorld, environmentFor, type World } from "./world.ts";
-import { insertComposerSlot, squareComposerTop } from "./composer-dom.ts";
+import { composerBorderColor, insertComposerSlot, squareComposerTop } from "./composer-dom.ts";
 import { attachComposerWater, type ComposerWater } from "./composer-water.ts";
 import { ambience } from "./sound.ts";
 
@@ -55,8 +57,6 @@ type PondState = PluginRpcResult<(typeof rpcContract)["getPond"]>;
 
 // Declared in package.json under bb.branding.experimental_icons.
 const KOI_ICON = "zen-koi/koi";
-const BREATH_ICON = "zen-koi/breath";
-const POI_ICON = "zen-koi/poi";
 const SOUND_ICON = "zen-koi/sound";
 const EXPAND_ICON = "zen-koi/expand";
 const PAGE_PATH = "pond";
@@ -69,9 +69,11 @@ const IDLE_CHECK_MS = 500;
 const MAX_STEP_MS = 100;
 /** The pond page's height, in pond pixels. */
 const PAGE_ROWS = 104;
+/** How long a catch, a miss, or a tear stays in the status line. */
+const NEWS_MS = 2_600;
 /**
  * `isRunning` dips to false for a moment at turn boundaries (a message sent
- * mid-turn, a queued message starting). Only a stop that lasts closes the pond.
+ * mid-turn, a queued message starting). Only a stop that lasts counts.
  */
 const STOP_GRACE_MS = 3_000;
 
@@ -80,6 +82,8 @@ const BREATH_LABEL: Record<BreathPhase, string> = {
   hold: "Hold",
   out: "Breathe out",
 };
+
+const VIEW_LABEL: Record<View, string> = { pond: "Pond", catch: "Catch" };
 
 const KOI_NAMES = [
   "Hana", "Sora", "Kin", "Kage", "Yuki", "Momo", "Aki", "Ume", "Tora", "Mizu",
@@ -169,7 +173,13 @@ function usePondState() {
     },
     [rpc],
   );
-  return { config: state?.config ?? FALLBACK_CONFIG, scoops: state?.scoops ?? {}, error, save, recordScoop };
+  return {
+    config: state?.config ?? FALLBACK_CONFIG,
+    scoops: state?.scoops ?? {},
+    error,
+    save,
+    recordScoop,
+  };
 }
 
 // Sound is a per-device choice, kept in this browser and shared by every pond.
@@ -180,7 +190,9 @@ const soundListeners = new Set<() => void>();
 
 function readSoundPrefs(): SoundPrefs {
   try {
-    const stored = JSON.parse(window.localStorage.getItem(SOUND_KEY) ?? "null") as Partial<SoundPrefs> | null;
+    const stored = JSON.parse(
+      window.localStorage.getItem(SOUND_KEY) ?? "null",
+    ) as Partial<SoundPrefs> | null;
     return {
       enabled: stored?.enabled === true,
       volume: typeof stored?.volume === "number" ? Math.max(0, Math.min(1, stored.volume)) : 0.5,
@@ -214,6 +226,27 @@ function useSoundPrefs(): SoundPrefs {
 }
 
 ambience.configure(soundPrefs.enabled, soundPrefs.volume);
+
+// One catch log per thread: the koi scooped during the agent's current (or
+// last) turn. Module-level so it survives the banner remounting on navigation.
+type Session = { scooped: string[]; ended: boolean; dismissed: boolean };
+const sessions = new Map<string, Session>();
+const sessionListeners = new Set<() => void>();
+
+function setSession(threadId: string, session: Session) {
+  sessions.set(threadId, session);
+  for (const listener of sessionListeners) listener();
+}
+
+function useSession(threadId: string): Session | undefined {
+  return useSyncExternalStore(
+    (listener) => {
+      sessionListeners.add(listener);
+      return () => sessionListeners.delete(listener);
+    },
+    () => sessions.get(threadId),
+  );
+}
 
 function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(
@@ -262,44 +295,82 @@ function useLatest<T>(value: T): RefObject<T> {
 
 type Hud = {
   breath: BreathPhase | null;
-  /** Paper left, in tenths, or null when not playing sukui. */
+  /** What the poi is doing, in catch view. */
+  status: string | null;
+  /** Paper left, in tenths, or null outside catch view. */
   paper: number | null;
-  torn: boolean;
-  inBowl: number;
+  bite: boolean;
   auto: boolean;
+  inBowl: number;
 };
 
-const EMPTY_HUD: Hud = { breath: null, paper: null, torn: false, inBowl: 0, auto: false };
+const EMPTY_HUD: Hud = { breath: null, status: null, paper: null, bite: false, auto: false, inBowl: 0 };
 
 function sameHud(a: Hud, b: Hud): boolean {
   return (
     a.breath === b.breath &&
+    a.status === b.status &&
     a.paper === b.paper &&
-    a.torn === b.torn &&
-    a.inBowl === b.inBowl &&
-    a.auto === b.auto
+    a.bite === b.bite &&
+    a.auto === b.auto &&
+    a.inBowl === b.inBowl
   );
 }
 
-function playEvents(events: readonly SukuiEvent[], recordScoop: (koiId: string) => void) {
+type News = { text: string; until: number };
+
+function koiName(config: PondConfig, id: string): string {
+  return config.koi.find((entry) => entry.id === id)?.name ?? "a koi";
+}
+
+/** Plays each event's sound and returns the news worth a moment in the status line. */
+function playEvents(
+  events: readonly SukuiEvent[],
+  config: PondConfig,
+  onScoop: (koiId: string) => void,
+): News | null {
+  let news: News | null = null;
+  const until = performance.now() + NEWS_MS;
   for (const event of events) {
     switch (event.type) {
       case "dip":
         ambience.dip();
         break;
+      case "bite":
+        ambience.plop();
+        break;
       case "scooped":
         ambience.splash();
-        recordScoop(event.koiId);
+        onScoop(event.koiId);
+        news = { text: `Scooped ${koiName(config, event.koiId)}!`, until };
+        break;
+      case "missed":
+        news = { text: `${koiName(config, event.koiId)} swam off`, until };
         break;
       case "torn":
         ambience.tear();
+        news = { text: "The paper tore. A fresh poi is coming", until };
         break;
       case "released":
         ambience.plop();
         break;
-      case "missed":
-        break;
     }
+  }
+  return news;
+}
+
+function catchStatus(sukui: Sukui, news: News | null, now: number): string {
+  if (news && now < news.until) return news.text;
+  const auto = isAuto(sukui);
+  switch (sukui.phase.kind) {
+    case "bite":
+      return auto ? "A koi is over the poi…" : "Now! Tap to scoop";
+    case "moving":
+      return auto ? "Finding a quiet spot" : "Moving the poi";
+    case "waiting":
+      return "Waiting for a koi";
+    case "cooldown":
+      return sukui.torn ? "A fresh poi is coming" : "Into the bowl";
   }
 }
 
@@ -307,6 +378,7 @@ type LoopOptions = {
   active: boolean;
   world: World;
   config: PondConfig;
+  view: View;
   /** Pond rows in the canvas: the strip, or the whole pond page. */
   rows: number;
   canvasRef: RefObject<HTMLCanvasElement | null>;
@@ -315,8 +387,9 @@ type LoopOptions = {
   /** Koi keep to the canvas rows (strip), or roam everywhere (page, compact). */
   focusCanvas: boolean;
   reducedMotion: boolean;
-  recordScoop: (koiId: string) => void;
+  onScoop: (koiId: string) => void;
   breathDotRef: RefObject<HTMLSpanElement | null>;
+  newsRef: RefObject<News | null>;
 };
 
 /**
@@ -368,8 +441,18 @@ function usePondLoop(options: LoopOptions): Hud {
 
     const tick = () => {
       if (disposed) return;
-      const { world, config, rows, waterRef, focusCanvas, reducedMotion, recordScoop, breathDotRef } =
-        latest.current;
+      const {
+        world,
+        config,
+        view,
+        rows,
+        waterRef,
+        focusCanvas,
+        reducedMotion,
+        onScoop,
+        breathDotRef,
+        newsRef,
+      } = latest.current;
       const now = performance.now();
       const dt = Math.min(MAX_STEP_MS, now - last);
       last = now;
@@ -379,7 +462,7 @@ function usePondLoop(options: LoopOptions): Hud {
       const showCanvas = canvas !== null && canvas.isConnected && onScreenRef.current && visible;
       const showWater = water !== null && water.connected && visible;
 
-      const breathing = config.ambience.breathing;
+      const breathing = config.ambience.breathing && view === "pond";
       const breath = breathAt(Date.now());
       breathDotRef.current?.style.setProperty(
         "transform",
@@ -394,15 +477,25 @@ function usePondLoop(options: LoopOptions): Hud {
       }
 
       const waterSize = showWater ? water.size() : null;
-      const width = showCanvas
-        ? Math.max(40, Math.ceil(canvas.clientWidth / PIXEL_SCALE))
+      const box = canvas?.parentElement;
+      const width = showCanvas && box
+        ? Math.max(40, Math.ceil(box.clientWidth / PIXEL_SCALE))
         : waterSize!.width;
       const below = waterSize?.height ?? 0;
       const height = rows + below;
       const focusBottom = focusCanvas && showCanvas ? rows : height;
       const env = environmentFor(config, new Date());
-      const events = advanceWorld(world, { width, height, focusBottom }, config, env, dt, reducedMotion);
-      playEvents(events, recordScoop);
+      const events = advanceWorld(
+        world,
+        { width, height, focusBottom },
+        config,
+        env,
+        dt,
+        reducedMotion,
+        view,
+      );
+      const news = playEvents(events, config, onScoop);
+      if (news) newsRef.current = news;
       ambience.setRain(env.weather === "rain");
       if (breathing && breathTurned && breath.phase === "in" && !reducedMotion) {
         // Each in-breath sends one slow ring across the pond.
@@ -412,11 +505,14 @@ function usePondLoop(options: LoopOptions): Hud {
       let scrim: Scrim | null = null;
       if (showWater) {
         const look = water.look(now);
-        scrim = { color: look.background, alpha: look.dark ? 0.5 : 0.62, start: rows - 9, full: rows };
+        scrim = { color: look.background, alpha: look.dark ? 0.4 : 0.55, start: rows - 12, full: rows };
       }
       if (showCanvas) {
         if (canvas.width !== width) canvas.width = width;
         if (canvas.height !== rows) canvas.height = rows;
+        // Whole pond pixels, so the strip and the chat input line up exactly.
+        canvas.style.width = `${width * PIXEL_SCALE}px`;
+        canvas.style.height = `${rows * PIXEL_SCALE}px`;
         const ctx = canvas.getContext("2d");
         if (ctx) world.painter.paint(ctx, world.pond, env, now, { y0: 0, rows, scrim }, world.sukui);
       }
@@ -425,16 +521,19 @@ function usePondLoop(options: LoopOptions): Hud {
         if (target.width !== width) target.width = width;
         if (target.height !== below) target.height = below;
         const ctx = target.getContext("2d");
-        if (ctx) world.painter.paint(ctx, world.pond, env, now, { y0: rows, rows: below, scrim }, world.sukui);
+        if (ctx) {
+          world.painter.paint(ctx, world.pond, env, now, { y0: rows, rows: below, scrim }, world.sukui);
+        }
       }
 
       const sukui = world.sukui;
       const next: Hud = {
         breath: breathing ? breath.phase : null,
+        status: sukui ? catchStatus(sukui, newsRef.current, now) : null,
         paper: sukui ? Math.max(0, Math.ceil(sukui.paper * 10)) : null,
-        torn: sukui?.torn ?? false,
+        bite: sukui?.phase.kind === "bite",
+        auto: sukui ? isAuto(sukui) : false,
         inBowl: sukui?.bowl.length ?? 0,
-        auto: sukui ? sukui.idleMs >= IDLE_TO_AUTO_MS : false,
       };
       if (!sameHud(next, hudNow)) {
         hudNow = next;
@@ -453,14 +552,15 @@ function usePondLoop(options: LoopOptions): Hud {
   return hud;
 }
 
-/** Pointer and keyboard play on a pond canvas: feed and watch, or scoop. */
+/** Pointer and keyboard play: feed and watch the pond, or tap to catch. */
 function usePondControls(
   world: World,
+  view: View,
   config: PondConfig,
   canvasRef: RefObject<HTMLCanvasElement | null>,
-  recordScoop: (koiId: string) => void,
+  onScoop: (koiId: string) => void,
+  newsRef: RefObject<News | null>,
 ) {
-  const activity = config.activity;
   const toPond = (event: PointerEvent<HTMLElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
@@ -470,49 +570,41 @@ function usePondControls(
       y: ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height,
     };
   };
-  const scoop = () => {
-    if (world.sukui) playEvents(lift(world.sukui, world.pond, Math.random), recordScoop);
+  const play = (events: SukuiEvent[]) => {
+    const news = playEvents(events, config, onScoop);
+    if (news) newsRef.current = news;
+  };
+  const feed = (x: number, y: number) => {
+    dropFood(world.pond, x, y, Math.random);
+    ambience.plop();
   };
   return {
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
       const point = toPond(event);
-      if (!point) return;
-      if (activity === "sukui" && world.sukui) aim(world.sukui, point.x, point.y);
-      else attend(world.pond, point.x, point.y);
+      if (point && view === "pond") attend(world.pond, point.x, point.y);
     },
     onPointerDown: (event: PointerEvent<HTMLElement>) => {
       if (event.button !== 0) return;
       const point = toPond(event);
       if (!point) return;
-      event.currentTarget.setPointerCapture(event.pointerId);
-      if (activity === "sukui" && world.sukui) {
-        aim(world.sukui, point.x, point.y);
-        playEvents(dip(world.sukui, world.pond), recordScoop);
+      if (view === "catch" && world.sukui) {
+        play(tapAt(world.sukui, world.pond, point.x, point.y, Math.random));
       } else {
-        dropFood(world.pond, point.x, point.y, Math.random);
-        ambience.plop();
+        feed(point.x, point.y);
       }
     },
-    onPointerUp: scoop,
-    onPointerCancel: scoop,
-    onLostPointerCapture: scoop,
     onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
       if (event.key !== " " && event.key !== "Enter") return;
       event.preventDefault();
       if (event.repeat) return;
       const pond = world.pond;
-      if (activity === "sukui" && world.sukui) {
-        aim(world.sukui, world.sukui.x, world.sukui.y);
-        playEvents(dip(world.sukui, pond), recordScoop);
+      if (view === "catch" && world.sukui) {
+        play(tap(world.sukui, pond, Math.random));
       } else {
         const x = pond.width * (0.2 + Math.random() * 0.6);
         const y = SHORE_ROWS + 4 + Math.random() * Math.max(2, pond.focusBottom - SHORE_ROWS - 8);
-        dropFood(pond, x, y, Math.random);
-        ambience.plop();
+        feed(x, y);
       }
-    },
-    onKeyUp: (event: KeyboardEvent<HTMLElement>) => {
-      if (event.key === " " || event.key === "Enter") scoop();
     },
   };
 }
@@ -550,14 +642,45 @@ function IconButton({
 function Glass({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div
-      className={`rounded-md bg-black/35 px-2 py-0.5 text-[11px] text-white/90 shadow-sm backdrop-blur-sm ${className}`}
+      className={`rounded-md bg-black/40 px-2 py-0.5 text-[11px] text-white/90 shadow-sm backdrop-blur-sm ${className}`}
     >
       {children}
     </div>
   );
 }
 
-function BreathGuide({ phase, dotRef }: { phase: BreathPhase; dotRef: RefObject<HTMLSpanElement | null> }) {
+function ViewSwitch({ view, onChange }: { view: View; onChange: (view: View) => void }) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="What the pond shows"
+      className="flex gap-0.5 rounded-lg bg-black/40 p-0.5 shadow-sm backdrop-blur-sm"
+    >
+      {(["pond", "catch"] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          role="radio"
+          aria-checked={option === view}
+          onClick={() => onChange(option)}
+          className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${
+            option === view ? "bg-white/90 text-black" : "text-white/80 hover:text-white"
+          }`}
+        >
+          {VIEW_LABEL[option]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function BreathGuide({
+  phase,
+  dotRef,
+}: {
+  phase: BreathPhase;
+  dotRef: RefObject<HTMLSpanElement | null>;
+}) {
   return (
     <Glass className="flex items-center gap-1.5">
       <span className="flex size-2.5 items-center justify-center" aria-hidden>
@@ -571,21 +694,54 @@ function BreathGuide({ phase, dotRef }: { phase: BreathPhase; dotRef: RefObject<
   );
 }
 
-function SukuiHud({ hud, grade }: { hud: Hud; grade: PoiGrade }) {
-  if (hud.paper === null) return null;
+function CatchHud({ hud, grade }: { hud: Hud; grade: PoiGrade }) {
+  if (hud.status === null || hud.paper === null) return null;
   return (
-    <Glass className="flex items-center gap-2">
-      <span className="text-white/70">Poi No.{grade}</span>
-      {hud.torn ? (
-        <span>Torn · a fresh poi is coming</span>
-      ) : (
-        <span className="flex h-1.5 w-12 overflow-hidden rounded-full bg-white/20" aria-label={`Paper ${hud.paper * 10}%`}>
-          <span className="block h-full bg-white/85" style={{ width: `${hud.paper * 10}%` }} />
-        </span>
-      )}
-      <span>
-        {hud.inBowl > 0 ? `${hud.inBowl} in the bowl` : hud.auto ? "Watching" : "Hold, then let go"}
+    <Glass className={`flex items-center gap-2 ${hud.bite && !hud.auto ? "bg-amber-500/80 text-black" : ""}`}>
+      <span className="opacity-70">No.{grade}</span>
+      <span
+        className="flex h-1.5 w-10 overflow-hidden rounded-full bg-white/25"
+        aria-label={`Paper ${hud.paper * 10}%`}
+      >
+        <span className="block h-full bg-white/90" style={{ width: `${hud.paper * 10}%` }} />
       </span>
+      <span aria-live="polite">{hud.status}</span>
+      {hud.inBowl > 0 ? <span className="opacity-70">· {hud.inBowl} in the bowl</span> : null}
+      {hud.auto && !hud.bite ? <span className="opacity-60">· tap the water to play</span> : null}
+    </Glass>
+  );
+}
+
+/** What the player scooped while the agent worked, until dismissed or the next turn. */
+function CatchSummary({
+  session,
+  config,
+  onDismiss,
+}: {
+  session: Session;
+  config: PondConfig;
+  onDismiss: () => void;
+}) {
+  const counts = new Map<string, number>();
+  for (const id of session.scooped) counts.set(id, (counts.get(id) ?? 0) + 1);
+  const names = [...counts]
+    .map(([id, count]) => (count > 1 ? `${koiName(config, id)} ×${count}` : koiName(config, id)))
+    .join(", ");
+  const total = session.scooped.length;
+  return (
+    <Glass className="pointer-events-auto flex items-center gap-2">
+      <span>
+        While your agent worked: {total === 1 ? "1 koi" : `${total} koi`} scooped
+        <span className="opacity-70"> · {names}</span>
+      </span>
+      <button
+        type="button"
+        aria-label="Dismiss"
+        onClick={onDismiss}
+        className="rounded px-1 text-white/70 hover:bg-white/15 hover:text-white"
+      >
+        ×
+      </button>
     </Glass>
   );
 }
@@ -615,24 +771,35 @@ function useComposerSlot(
 function PondBanner() {
   const composer = useComposer();
   if (composer.scope.kind !== "thread") return null;
-  return <ThreadPond isRunning={composer.isRunning} compact={composer.layout === "compact"} />;
+  return (
+    <ThreadPond
+      threadId={composer.scope.threadId}
+      isRunning={composer.isRunning}
+      compact={composer.layout === "compact"}
+    />
+  );
 }
 
-function shouldOpen(show: ShowMode, running: boolean): boolean {
-  if (show === "always") return true;
-  if (show === "page") return false;
-  return running;
-}
-
-function ThreadPond({ isRunning, compact }: { isRunning: boolean; compact: boolean }) {
+function ThreadPond({
+  threadId,
+  isRunning,
+  compact,
+}: {
+  threadId: string;
+  isRunning: boolean;
+  compact: boolean;
+}) {
   const pluginId = experimental_usePluginId();
   const navigate = useBbNavigate();
   const reducedMotion = useReducedMotion();
-  const { config, save, recordScoop } = usePondState();
+  const { config, recordScoop } = usePondState();
   const sound = useSoundPrefs();
+  const session = useSession(threadId);
   const [hidden, setHidden] = useStoredFlag(`${pluginId}.hidden`);
   const [running, setRunning] = useState(isRunning);
+  const [override, setOverride] = useState<View | null>(null);
   const world = useMemo(createWorld, []);
+  const newsRef = useRef<News | null>(null);
 
   useEffect(() => {
     if (isRunning) {
@@ -643,7 +810,25 @@ function ThreadPond({ isRunning, compact }: { isRunning: boolean; compact: boole
     return () => clearTimeout(timer);
   }, [isRunning]);
 
-  const open = shouldOpen(config.show, running);
+  // A new turn starts a fresh catch log; the end of one keeps it for the summary.
+  // Each change of state also goes back to that state's own view.
+  useEffect(() => {
+    setOverride(null);
+    const current = sessions.get(threadId);
+    if (running) {
+      if (!current || current.ended) setSession(threadId, { scooped: [], ended: false, dismissed: false });
+    } else if (current && !current.ended) {
+      setSession(threadId, { ...current, ended: true });
+    }
+  }, [running, threadId]);
+
+  const defaultView: View | null = running
+    ? config.views.working
+    : config.views.idle === "pond"
+      ? "pond"
+      : null;
+  const view = override ?? defaultView;
+  const open = view !== null;
   const showPond = open && !hidden && !compact;
   const flooded = open && !hidden;
 
@@ -654,6 +839,7 @@ function ThreadPond({ isRunning, compact }: { isRunning: boolean; compact: boole
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const breathDotRef = useRef<HTMLSpanElement | null>(null);
   const waterRef = useRef<ComposerWater | null>(null);
+  const [borderColor, setBorderColor] = useState<string | null>(null);
 
   // While the pond is open, it runs on into the chat input below.
   useEffect(() => {
@@ -661,29 +847,48 @@ function ThreadPond({ isRunning, compact }: { isRunning: boolean; compact: boole
     if (!flooded || !marker) return;
     const water = attachComposerWater(marker);
     waterRef.current = water;
+    setBorderColor(composerBorderColor(marker));
     return () => {
       water?.remove();
       if (waterRef.current === water) waterRef.current = null;
     };
   }, [flooded, slot]);
 
+  const onScoop = useCallback(
+    (koiId: string) => {
+      recordScoop(koiId);
+      const current = sessions.get(threadId);
+      if (current && !current.ended) {
+        setSession(threadId, { ...current, scooped: [...current.scooped, koiId] });
+      }
+    },
+    [recordScoop, threadId],
+  );
   const hud = usePondLoop({
     active: flooded,
     world,
     config,
+    view: view ?? "pond",
     rows: STRIP_ROWS,
     canvasRef,
     waterRef,
     focusCanvas: true,
     reducedMotion,
-    recordScoop,
+    onScoop,
     breathDotRef,
+    newsRef,
   });
-  const controls = usePondControls(world, config, canvasRef, recordScoop);
-  const setActivity = (activity: Activity) => void save({ ...config, activity });
+  const controls = usePondControls(world, view ?? "pond", config, canvasRef, onScoop, newsRef);
   const openPage = () => navigate.toPluginPanel(PAGE_PATH);
   // In the slot, the pond and the chat input below it read as one box.
   const frame = slot ? "rounded-t-xl border-b-0" : "rounded-xl";
+  const summary =
+    !running && session?.ended && !session.dismissed && session.scooped.length > 0
+      ? session
+      : null;
+  const dismissSummary = () => {
+    if (session) setSession(threadId, { ...session, dismissed: true });
+  };
 
   let content: ReactNode = null;
   if (open && !showPond) {
@@ -691,10 +896,11 @@ function ThreadPond({ isRunning, compact }: { isRunning: boolean; compact: boole
       <section
         aria-label="Zen Koi"
         className={`flex h-8 items-center gap-2 border border-border bg-card pr-1 pl-3 text-xs ${frame}`}
+        style={borderColor ? { borderColor } : undefined}
       >
         <Icon name={KOI_ICON} className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
-          {hud.breath ? BREATH_LABEL[hud.breath] : "Your koi are in the pond"}
+          {hud.status ?? (hud.breath ? BREATH_LABEL[hud.breath] : "Your koi are in the pond")}
         </span>
         <button
           type="button"
@@ -721,36 +927,28 @@ function ThreadPond({ isRunning, compact }: { isRunning: boolean; compact: boole
       <section
         aria-label="Zen Koi"
         className={`group relative overflow-hidden border border-border bg-card ${frame}`}
+        style={borderColor ? { borderColor } : undefined}
       >
         <div
           role="button"
           tabIndex={0}
           aria-label={
-            config.activity === "sukui"
-              ? "Koi pond. Hold to dip the poi, let go to scoop. Move slowly."
+            view === "catch"
+              ? "Koi pond. Tap the water to move the poi; tap when a koi is over it to scoop."
               : "Koi pond. Click to scatter a little food."
           }
-          className={`block w-full touch-none outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${
-            config.activity === "sukui" ? "cursor-none" : "cursor-pointer"
-          }`}
+          className="block w-full cursor-pointer touch-none overflow-hidden outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           style={{ height: STRIP_ROWS * PIXEL_SCALE }}
           // Keep the caret in the composer: clicking the pond must not steal focus.
           onMouseDown={(event) => event.preventDefault()}
           {...controls}
         >
-          <canvas
-            ref={canvasRef}
-            className="block size-full"
-            style={{ imageRendering: "pixelated" }}
-            aria-hidden
-          />
+          <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
         </div>
-        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-lg bg-black/35 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-300 group-focus-within:opacity-100 group-hover:opacity-100">
-          <IconButton
-            label={config.activity === "sukui" ? "Watch the koi" : "Play koi-sukui"}
-            icon={config.activity === "sukui" ? KOI_ICON : POI_ICON}
-            onClick={() => setActivity(config.activity === "sukui" ? "watch" : "sukui")}
-          />
+        <div className="absolute top-1.5 left-1.5">
+          <ViewSwitch view={view ?? "pond"} onChange={setOverride} />
+        </div>
+        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-300 group-focus-within:opacity-100 group-hover:opacity-100">
           <IconButton
             label={sound.enabled ? "Mute the pond" : "Play the pond's sounds"}
             icon={SOUND_ICON}
@@ -760,14 +958,16 @@ function ThreadPond({ isRunning, compact }: { isRunning: boolean; compact: boole
           <IconButton label="Open the Zen Pond" icon={EXPAND_ICON} onClick={openPage} />
           <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
         </div>
-        <div className="pointer-events-none absolute bottom-1.5 left-1.5 flex gap-1">
-          <SukuiHud hud={hud} grade={config.poi} />
-        </div>
-        {hud.breath ? (
-          <div className="pointer-events-none absolute right-1.5 bottom-1.5">
-            <BreathGuide phase={hud.breath} dotRef={breathDotRef} />
+        <div className="pointer-events-none absolute right-1.5 bottom-1.5 left-1.5 flex items-end justify-between gap-2">
+          <div className="min-w-0">
+            {view === "catch" ? (
+              <CatchHud hud={hud} grade={config.poi} />
+            ) : summary ? (
+              <CatchSummary session={summary} config={config} onDismiss={dismissSummary} />
+            ) : null}
           </div>
-        ) : null}
+          {hud.breath ? <BreathGuide phase={hud.breath} dotRef={breathDotRef} /> : null}
+        </div>
       </section>
     );
   }
@@ -858,7 +1058,15 @@ function Segmented<T extends string>({
   );
 }
 
-function Switch({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
+function Switch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  label: string;
+}) {
   return (
     <button
       type="button"
@@ -866,7 +1074,9 @@ function Switch({ checked, onChange, label }: { checked: boolean; onChange: (val
       aria-checked={checked}
       aria-label={label}
       onClick={() => onChange(!checked)}
-      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${checked ? "bg-primary" : "bg-muted-foreground/30"}`}
+      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+        checked ? "bg-primary" : "bg-muted-foreground/30"
+      }`}
     >
       <span
         className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-background shadow transition-transform ${
@@ -965,12 +1175,26 @@ function AddKoi({ config, onAdd }: { config: PondConfig; onAdd: (entry: KoiEntry
     setId(newKoiId());
     setName("");
   };
+  const surprise = () => {
+    setId(newKoiId());
+    setVariety(VARIETIES[Math.floor(Math.random() * VARIETIES.length)]!);
+  };
   return (
     <div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
-      <div className="text-xs text-muted-foreground">
-        {full
-          ? `The pond is full at ${MAX_KOI} koi. Release one to make room.`
-          : "Choose a variety. Each koi's pattern is its own; this is how yours will look."}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>
+          {full
+            ? `The pond is full at ${MAX_KOI} koi. Release one to make room.`
+            : "Every koi's pattern is its own. This is how yours will look."}
+        </span>
+        <button
+          type="button"
+          disabled={full}
+          onClick={surprise}
+          className="rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:opacity-40"
+        >
+          New patterns
+        </button>
       </div>
       <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
         {VARIETIES.map((option) => (
@@ -982,7 +1206,9 @@ function AddKoi({ config, onAdd }: { config: PondConfig; onAdd: (entry: KoiEntry
             title={VARIETY_INFO[option].blurb}
             onClick={() => setVariety(option)}
             className={`flex flex-col items-center gap-1 rounded-lg border p-1.5 text-[11px] transition-colors disabled:opacity-40 ${
-              option === variety ? "border-primary bg-background text-foreground" : "border-transparent text-muted-foreground hover:bg-background"
+              option === variety
+                ? "border-primary bg-background text-foreground"
+                : "border-transparent text-muted-foreground hover:bg-background"
             }`}
           >
             <KoiPortrait id={id} variety={option} length={9} />
@@ -1020,23 +1246,28 @@ function ZenPondPage() {
   const reducedMotion = useReducedMotion();
   const { config, scoops, error, save, recordScoop } = usePondState();
   const sound = useSoundPrefs();
+  const [view, setView] = useState<View>("pond");
   const world = useMemo(createWorld, []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const breathDotRef = useRef<HTMLSpanElement | null>(null);
+  const newsRef = useRef<News | null>(null);
   const hud = usePondLoop({
     active: true,
     world,
     config,
+    view,
     rows: PAGE_ROWS,
     canvasRef,
     focusCanvas: false,
     reducedMotion,
-    recordScoop,
+    onScoop: recordScoop,
     breathDotRef,
+    newsRef,
   });
-  const controls = usePondControls(world, config, canvasRef, recordScoop);
+  const controls = usePondControls(world, view, config, canvasRef, recordScoop, newsRef);
   const update = (patch: Partial<PondConfig>) => void save({ ...config, ...patch });
-  const garden = (patch: Partial<PondConfig["garden"]>) => update({ garden: { ...config.garden, ...patch } });
+  const garden = (patch: Partial<PondConfig["garden"]>) =>
+    update({ garden: { ...config.garden, ...patch } });
   const ambienceSet = (patch: Partial<PondConfig["ambience"]>) =>
     update({ ambience: { ...config.ambience, ...patch } });
   const now = new Date();
@@ -1049,17 +1280,18 @@ function ZenPondPage() {
             <h1 className="text-lg font-medium text-foreground">Zen Pond</h1>
             <p className="text-xs text-muted-foreground">
               {capitalize(resolveSeason(config, now))} · {resolveTime(config, now)} ·{" "}
+              {resolveWeather(config, now) === "rain" ? "rain" : "clear"} ·{" "}
               {config.koi.length === 1 ? "1 koi" : `${config.koi.length} koi`}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Segmented<Activity>
-              label="Activity"
-              value={config.activity}
-              onChange={(activity) => update({ activity })}
+            <Segmented<View>
+              label="What the pond shows"
+              value={view}
+              onChange={setView}
               options={[
-                { value: "watch", label: "Watch" },
-                { value: "sukui", label: "Koi-sukui" },
+                { value: "pond", label: "Pond" },
+                { value: "catch", label: "Catch" },
               ]}
             />
             <button
@@ -1067,7 +1299,9 @@ function ZenPondPage() {
               aria-pressed={sound.enabled}
               onClick={() => setSoundPrefs({ ...sound, enabled: !sound.enabled })}
               className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
-                sound.enabled ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+                sound.enabled
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:text-foreground"
               }`}
             >
               <Icon name={SOUND_ICON} className="size-3.5" aria-hidden />
@@ -1082,26 +1316,20 @@ function ZenPondPage() {
             role="button"
             tabIndex={0}
             aria-label={
-              config.activity === "sukui"
-                ? "Koi pond. Hold to dip the poi, let go to scoop. Move slowly."
+              view === "catch"
+                ? "Koi pond. Tap the water to move the poi; tap when a koi is over it to scoop."
                 : "Koi pond. Click to scatter a little food."
             }
-            className={`block w-full touch-none outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${
-              config.activity === "sukui" ? "cursor-none" : "cursor-pointer"
-            }`}
+            className="block w-full cursor-pointer touch-none overflow-hidden outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
             style={{ height: PAGE_ROWS * PIXEL_SCALE }}
             {...controls}
           >
-            <canvas ref={canvasRef} className="block size-full" style={{ imageRendering: "pixelated" }} aria-hidden />
+            <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
           </div>
-          <div className="pointer-events-none absolute bottom-2 left-2">
-            <SukuiHud hud={hud} grade={config.poi} />
+          <div className="pointer-events-none absolute right-2 bottom-2 left-2 flex items-end justify-between gap-2">
+            <div className="min-w-0">{view === "catch" ? <CatchHud hud={hud} grade={config.poi} /> : null}</div>
+            {hud.breath ? <BreathGuide phase={hud.breath} dotRef={breathDotRef} /> : null}
           </div>
-          {hud.breath ? (
-            <div className="pointer-events-none absolute right-2 bottom-2">
-              <BreathGuide phase={hud.breath} dotRef={breathDotRef} />
-            </div>
-          ) : null}
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
@@ -1127,7 +1355,77 @@ function ZenPondPage() {
             <AddKoi config={config} onAdd={(entry) => update({ koi: [...config.koi, entry] })} />
           </Section>
 
+          <Section title="Above the chat input" description="What a thread's pond shows, and when.">
+            <Row label="While the agent works" hint="Catch koi with a paper poi, or just watch.">
+              <Segmented<View>
+                label="While the agent works"
+                value={config.views.working}
+                onChange={(working) => update({ views: { ...config.views, working } })}
+                options={[
+                  { value: "catch", label: "Catch" },
+                  { value: "pond", label: "Pond" },
+                ]}
+              />
+            </Row>
+            <Row label="When the agent is idle">
+              <Segmented<IdleView>
+                label="When the agent is idle"
+                value={config.views.idle}
+                onChange={(idle) => update({ views: { ...config.views, idle } })}
+                options={[
+                  { value: "pond", label: "Pond" },
+                  { value: "hidden", label: "Hidden" },
+                ]}
+              />
+            </Row>
+            <p className="text-[11px] text-muted-foreground">
+              The Pond and Catch switch on the pond changes the view until the agent starts or stops.
+            </p>
+          </Section>
+
+          <Section
+            title="Catching koi"
+            description="Koi-sukui, the festival game with a paper poi, made simple."
+          >
+            <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
+              <li>Tap the water to move the poi there. It waits, and koi gather under a still poi.</li>
+              <li>When a “!” shows over the poi, tap to scoop. Wait too long and the koi swims off.</li>
+              <li>Wet paper weakens and big koi strain it. When it tears, a fresh poi comes.</li>
+              <li>Scooped koi rest in the bowl, then go back. Leave it alone and it plays by itself.</li>
+            </ul>
+            <Row label="Poi paper" hint="Higher numbers are thinner, like at a real stall.">
+              <Segmented<PoiGrade>
+                label="Poi paper"
+                value={config.poi}
+                onChange={(poi) => update({ poi })}
+                options={[
+                  { value: "4", label: "No.4 thick" },
+                  { value: "5", label: "No.5" },
+                  { value: "6", label: "No.6 thin" },
+                ]}
+              />
+            </Row>
+          </Section>
+
           <Section title="Garden" description="What grows around the water.">
+            <Row label="Pond layout" hint="Shoreline, stones, pads, and which side the tree stands on.">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => update({ layout: { ...config.layout, seed: newSeed() } })}
+                  className="rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  New layout
+                </button>
+              </div>
+            </Row>
+            <Row label="New layout every day">
+              <Switch
+                label="New layout every day"
+                checked={config.layout.daily}
+                onChange={(daily) => update({ layout: { ...config.layout, daily } })}
+              />
+            </Row>
             <Row label="Stone lantern" hint="Lit from dusk to dawn, and in the rain.">
               <Switch label="Stone lantern" checked={config.garden.lantern} onChange={(lantern) => garden({ lantern })} />
             </Row>
@@ -1151,13 +1449,16 @@ function ZenPondPage() {
             </Row>
           </Section>
 
-          <Section title="Ambience" description="Auto follows your calendar and clock.">
+          <Section title="Ambience" description="Auto follows your calendar and clock, with rain now and then.">
             <Row label="Season">
               <Segmented
                 label="Season"
                 value={config.ambience.season}
                 onChange={(season) => ambienceSet({ season })}
-                options={[{ value: "auto", label: "Auto" }, ...SEASONS.map((value) => ({ value, label: capitalize(value) }))]}
+                options={[
+                  { value: "auto", label: "Auto" },
+                  ...SEASONS.map((value) => ({ value, label: capitalize(value) })),
+                ]}
               />
             </Row>
             <Row label="Time of day">
@@ -1165,15 +1466,19 @@ function ZenPondPage() {
                 label="Time of day"
                 value={config.ambience.time}
                 onChange={(time) => ambienceSet({ time })}
-                options={[{ value: "auto", label: "Auto" }, ...TIMES.map((value) => ({ value, label: capitalize(value) }))]}
+                options={[
+                  { value: "auto", label: "Auto" },
+                  ...TIMES.map((value) => ({ value, label: capitalize(value) })),
+                ]}
               />
             </Row>
             <Row label="Weather">
-              <Segmented<Weather>
+              <Segmented<WeatherChoice>
                 label="Weather"
                 value={config.ambience.weather}
                 onChange={(weather) => ambienceSet({ weather })}
                 options={[
+                  { value: "auto", label: "Auto" },
                   { value: "clear", label: "Clear" },
                   { value: "rain", label: "Rain" },
                 ]}
@@ -1188,7 +1493,9 @@ function ZenPondPage() {
                   value={Math.round(sound.volume * 100)}
                   aria-label="Volume"
                   disabled={!sound.enabled}
-                  onChange={(event) => setSoundPrefs({ ...sound, volume: Number(event.target.value) / 100 })}
+                  onChange={(event) =>
+                    setSoundPrefs({ ...sound, volume: Number(event.target.value) / 100 })
+                  }
                   className="w-24 accent-primary disabled:opacity-40"
                 />
                 <Switch
@@ -1198,50 +1505,13 @@ function ZenPondPage() {
                 />
               </div>
             </Row>
-            <Row label="Breathing guide" hint="In for 4, hold for 2, out for 6.">
+            <Row label="Breathing guide" hint="In for 4, hold for 2, out for 6, in the pond view.">
               <Switch
                 label="Breathing guide"
                 checked={config.ambience.breathing}
                 onChange={(breathing) => ambienceSet({ breathing })}
               />
             </Row>
-          </Section>
-
-          <Section
-            title="Koi-sukui"
-            description="The festival game, played gently. Every koi you scoop rests in the bowl, then goes back."
-          >
-            <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
-              <li>Hold to dip the poi, let go to lift it.</li>
-              <li>Move slowly. Koi flee a poi swept through the water, and gather under a still one.</li>
-              <li>Only koi near the surface can be lifted. Catching one on the rim spares the paper.</li>
-              <li>Wet paper weakens, so lift soon after you dip. Leave it alone and it plays by itself.</li>
-            </ul>
-            <Row label="Poi paper" hint="Higher numbers are thinner, like at a real stall.">
-              <Segmented<PoiGrade>
-                label="Poi paper"
-                value={config.poi}
-                onChange={(poi) => update({ poi })}
-                options={[
-                  { value: "4", label: "No.4 thick" },
-                  { value: "5", label: "No.5" },
-                  { value: "6", label: "No.6 thin" },
-                ]}
-              />
-            </Row>
-          </Section>
-
-          <Section title="Above the chat input" description="Where your pond shows up in threads.">
-            <Segmented<ShowMode>
-              label="Show the pond"
-              value={config.show}
-              onChange={(show) => update({ show })}
-              options={[
-                { value: "working", label: "While the agent works" },
-                { value: "always", label: "Always" },
-                { value: "page", label: "Only here" },
-              ]}
-            />
           </Section>
         </div>
       </div>

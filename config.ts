@@ -49,32 +49,33 @@ export type KoiEntry = {
 export const LILY_AMOUNTS = ["none", "few", "many"] as const;
 export type LilyAmount = (typeof LILY_AMOUNTS)[number];
 
-export const WEATHERS = ["clear", "rain"] as const;
-export type Weather = (typeof WEATHERS)[number];
+export const WEATHERS = ["auto", "clear", "rain"] as const;
+export type WeatherChoice = (typeof WEATHERS)[number];
+export type Weather = Exclude<WeatherChoice, "auto">;
 
-/** Watch the koi, or play koi-sukui with a paper poi. */
-export const ACTIVITIES = ["watch", "sukui"] as const;
-export type Activity = (typeof ACTIVITIES)[number];
+/** What the strip above the chat input shows. */
+export const VIEWS = ["catch", "pond"] as const;
+export type View = (typeof VIEWS)[number];
+export const IDLE_VIEWS = ["pond", "hidden"] as const;
+export type IdleView = (typeof IDLE_VIEWS)[number];
 
 /** Poi paper, numbered like a festival stall's: higher is thinner. */
 export const POI_GRADES = ["4", "5", "6"] as const;
 export type PoiGrade = (typeof POI_GRADES)[number];
 
-/** When the pond sits above a thread's chat input. */
-export const SHOW_MODES = ["working", "always", "page"] as const;
-export type ShowMode = (typeof SHOW_MODES)[number];
-
 export type PondConfig = {
   koi: KoiEntry[];
   garden: { lantern: boolean; tree: boolean; lilies: LilyAmount; plants: boolean };
+  /** The pond's shape comes from this seed; `daily` gives it a new one each day. */
+  layout: { seed: number; daily: boolean };
   ambience: {
     season: Season | "auto";
     time: TimeOfDay | "auto";
-    weather: Weather;
+    weather: WeatherChoice;
     breathing: boolean;
   };
-  show: ShowMode;
-  activity: Activity;
+  /** What the strip shows while the agent works, and when it is idle. */
+  views: { working: View; idle: IdleView };
   poi: PoiGrade;
 };
 
@@ -96,9 +97,9 @@ export function defaultConfig(now: number): PondConfig {
       koi("kage", "showa", "Kage", 2),
     ],
     garden: { lantern: true, tree: true, lilies: "few", plants: true },
-    ambience: { season: "auto", time: "auto", weather: "clear", breathing: false },
-    show: "working",
-    activity: "watch",
+    layout: { seed: newSeed(), daily: true },
+    ambience: { season: "auto", time: "auto", weather: "auto", breathing: false },
+    views: { working: "catch", idle: "pond" },
     poi: "4",
   };
 }
@@ -138,6 +139,30 @@ export function resolveSeason(config: PondConfig, date: Date): Season {
 
 export function resolveTime(config: PondConfig, date: Date): TimeOfDay {
   return config.ambience.time === "auto" ? timeOfDay(date) : config.ambience.time;
+}
+
+export function newSeed(): number {
+  return Math.floor(Math.random() * 1_000_000_000);
+}
+
+/** The seed the pond is drawn from today. */
+export function layoutSeed(config: PondConfig, date: Date): number {
+  if (!config.layout.daily) return config.layout.seed;
+  const day = Math.floor((date.getTime() - date.getTimezoneOffset() * 60_000) / DAY_MS);
+  return mixSeed(config.layout.seed, day);
+}
+
+/** Auto weather: mostly clear, with a spell of rain now and then, the same in every window. */
+export function resolveWeather(config: PondConfig, date: Date): Weather {
+  if (config.ambience.weather !== "auto") return config.ambience.weather;
+  const spell = Math.floor(date.getTime() / (40 * 60_000));
+  return (mixSeed(config.layout.seed, spell) % 100) / 100 < 0.2 ? "rain" : "clear";
+}
+
+function mixSeed(a: number, b: number): number {
+  let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(b + 0x632be5ab, 0xc2b2ae35);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  return (h ^ (h >>> 13)) >>> 0;
 }
 
 export const POND_CHANNEL = "pond";

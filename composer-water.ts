@@ -28,9 +28,14 @@ export class ComposerWater {
     layer.setAttribute("aria-hidden", "true");
     // Below the editor's content but above the form's own background, inside
     // the stacking context `isolation: isolate` gives the form.
+    // It reaches up over the form's top border (made transparent while the
+    // pond sits above), so no line of the form's background shows at the seam.
     Object.assign(layer.style, {
       position: "absolute",
-      inset: "0",
+      top: "-1px",
+      left: "0",
+      right: "0",
+      bottom: "0",
       zIndex: "-1",
       borderRadius: "inherit",
       overflow: "hidden",
@@ -39,12 +44,8 @@ export class ComposerWater {
       transition: `opacity ${FADE_MS}ms ease`,
     });
     const canvas = document.createElement("canvas");
-    Object.assign(canvas.style, {
-      display: "block",
-      width: "100%",
-      height: "100%",
-      imageRendering: "pixelated",
-    });
+    // Sized in whole pond pixels by `size()`, so it lines up with the strip above.
+    Object.assign(canvas.style, { display: "block", imageRendering: "pixelated" });
     layer.append(canvas);
     this.canvas = canvas;
     this.#layer = layer;
@@ -60,12 +61,13 @@ export class ComposerWater {
     return this.#layer.isConnected;
   }
 
-  /** The chat input's size in pond pixels. */
+  /** The chat input's size in pond pixels; the canvas is set to match exactly. */
   size(): { width: number; height: number } {
-    return {
-      width: Math.max(8, Math.ceil(this.#layer.clientWidth / PIXEL_SCALE)),
-      height: Math.max(4, Math.ceil(this.#layer.clientHeight / PIXEL_SCALE)),
-    };
+    const width = Math.max(8, Math.ceil(this.#layer.clientWidth / PIXEL_SCALE));
+    const height = Math.max(4, Math.ceil(this.#layer.clientHeight / PIXEL_SCALE));
+    this.canvas.style.width = `${width * PIXEL_SCALE}px`;
+    this.canvas.style.height = `${height * PIXEL_SCALE}px`;
+    return { width, height };
   }
 
   /** The chat input's background and scheme, rechecked now and then for theme changes. */

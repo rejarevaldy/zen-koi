@@ -23,6 +23,7 @@
     "sound.ts",
     "world.ts",
     "koi.test.ts",
-    "sukui.test.ts"
+    "sukui.test.ts",
+    "server.test.ts"
   ]
 }
