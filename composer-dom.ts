@@ -32,20 +32,25 @@ export function insertComposerSlot(from: Element, pluginId: string): HTMLElement
 }
 
 /**
- * Squares the chat input's top corners and hides its top border, so the pond
- * above runs straight into it as one box. Returns a function that restores them.
+ * Squares the chat input's top corners and removes its top border and its drop
+ * shadow, so the pond above runs straight into it as one box. The border goes
+ * entirely: the form clips its children to the padding box, so a transparent
+ * border would still show the form's background as a line. The shadow's blur
+ * would darken the pond's last row. Returns a function that restores them.
  */
 export function squareComposerTop(from: Element): (() => void) | null {
   const surface = findComposerSurface(from);
   if (!surface) return null;
-  const { borderTopLeftRadius, borderTopRightRadius, borderTopColor } = surface.style;
+  const { borderTopLeftRadius, borderTopRightRadius, borderTopWidth, boxShadow } = surface.style;
   surface.style.borderTopLeftRadius = "0";
   surface.style.borderTopRightRadius = "0";
-  surface.style.borderTopColor = "transparent";
+  surface.style.borderTopWidth = "0";
+  surface.style.boxShadow = "none";
   return () => {
     surface.style.borderTopLeftRadius = borderTopLeftRadius;
     surface.style.borderTopRightRadius = borderTopRightRadius;
-    surface.style.borderTopColor = borderTopColor;
+    surface.style.borderTopWidth = borderTopWidth;
+    surface.style.boxShadow = boxShadow;
   };
 }
 

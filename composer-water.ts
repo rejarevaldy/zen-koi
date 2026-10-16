@@ -28,14 +28,9 @@ export class ComposerWater {
     layer.setAttribute("aria-hidden", "true");
     // Below the editor's content but above the form's own background, inside
     // the stacking context `isolation: isolate` gives the form.
-    // It reaches up over the form's top border (made transparent while the
-    // pond sits above), so no line of the form's background shows at the seam.
     Object.assign(layer.style, {
       position: "absolute",
-      top: "-1px",
-      left: "0",
-      right: "0",
-      bottom: "0",
+      inset: "0",
       zIndex: "-1",
       borderRadius: "inherit",
       overflow: "hidden",
