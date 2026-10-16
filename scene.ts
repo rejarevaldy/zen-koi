@@ -17,6 +17,8 @@ export const SHORE_ROWS = 8;
 const DEPTH_RANGE = 22;
 const LANTERN_MIN_WIDTH = 110;
 const WORLD_SEED = 20_241;
+/** Sunlight on the bed and leaf shade move slowly, so they are redrawn only this often. */
+const LIGHT_REFRESH_MS = 100;
 
 export type Environment = {
   /** The pond's shape: shoreline, stones, pads, plants, and which side the tree is on. */
@@ -40,7 +42,8 @@ export type View = { y0: number; rows: number; scrim: Scrim | null };
 
 type Rgb = readonly [number, number, number];
 const parsed = new Map<string, Rgb>();
-const mixed = new Map<string, string>();
+/** Mixed colors by first color, then second, then step: no string keys on the hot path. */
+const mixed = new Map<string, Map<string, string[]>>();
 
 function rgb(hex: string): Rgb {
   let value = parsed.get(hex);
@@ -57,8 +60,11 @@ export function mix(a: string, b: string, t: number): string {
   const step = Math.round(Math.min(1, Math.max(0, t)) * 20);
   if (step === 0) return a;
   if (step === 20) return b;
-  const key = `${a}${b}${step}`;
-  let value = mixed.get(key);
+  let byB = mixed.get(a);
+  if (!byB) mixed.set(a, (byB = new Map()));
+  let steps = byB.get(b);
+  if (!steps) byB.set(b, (steps = []));
+  let value = steps[step];
   if (!value) {
     const [ar, ag, ab] = rgb(a);
     const [br, bg, bb] = rgb(b);
@@ -68,7 +74,7 @@ export function mix(a: string, b: string, t: number): string {
         .toString(16)
         .padStart(2, "0");
     value = `#${channel(ar, br)}${channel(ag, bg)}${channel(ab, bb)}`;
-    mixed.set(key, value);
+    steps[step] = value;
   }
   return value;
 }
@@ -445,14 +451,24 @@ export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle
     ctx.fillStyle = style.shade;
     for (const key of pixels.keys()) ctx.fillRect(xOf(key) + ox, yOf(key) + oy, 1, 1);
   }
+  // A koi has only a few colors: shade each once, then fill its pixels together.
   const depth = koi.depth * 0.55;
+  const groups = new Map<string, number[]>();
   for (const [key, pixel] of pixels) {
-    let shade = pixel.fin ? mix(pixel.color, style.water, 0.4) : pixel.color;
+    const group = (pixel.fin ? "f" : "b") + pixel.color;
+    const keys = groups.get(group);
+    if (keys) keys.push(key);
+    else groups.set(group, [key]);
+  }
+  for (const [group, keys] of groups) {
+    const fin = group[0] === "f";
+    const color = group.slice(1);
+    let shade = fin ? mix(color, style.water, 0.4) : color;
     shade = mix(shade, style.water, depth);
     if (style.dimAmount > 0) shade = mix(shade, style.dim, style.dimAmount * 0.6);
-    ctx.globalAlpha = pixel.fin ? 0.8 : 1;
+    ctx.globalAlpha = fin ? 0.8 : 1;
     ctx.fillStyle = shade;
-    ctx.fillRect(xOf(key), yOf(key), 1, 1);
+    for (const key of keys) ctx.fillRect(xOf(key), yOf(key), 1, 1);
   }
   ctx.globalAlpha = 1;
 }
@@ -511,6 +527,9 @@ export class PondPainter {
   #land: Land = LAND.spring;
   #seed = WORLD_SEED;
   #treeRight = false;
+  #caustics: HTMLCanvasElement | null = null;
+  #dapple: HTMLCanvasElement | null = null;
+  #lightAt = -Infinity;
   /** Where the tree hangs over the water; petals fall from here. */
   canopy: Region | null = null;
 
@@ -546,6 +565,9 @@ export class PondPainter {
         ? { x: lanternX, y: this.#shore[clampInt(lanternX + 3, 0, width)]! + 3 }
         : null;
     this.#base = this.#paintBase();
+    this.#caustics = newCanvas(width, height);
+    this.#dapple = garden.tree ? newCanvas(width, height) : null;
+    this.#lightAt = -Infinity;
     this.#pads = this.#paintPads(garden.lilies, focusBottom);
     this.#plants = garden.plants ? plantsFor(width, height, this.#seed) : [];
     if (garden.tree) {
@@ -594,12 +616,25 @@ export class PondPainter {
     }
     if (sukui?.dipped) paintPoi(ctx, sukui, light, now);
 
-    if (env.weather === "clear") this.#paintCaustics(ctx, light, now, y0, y1);
+    const clear = env.weather === "clear";
+    const dapple = clear && env.time !== "night" && this.#dapple !== null;
+    // Both views of a frame (strip and chat input) share one drawing of the light.
+    if (clear && (now - this.#lightAt >= LIGHT_REFRESH_MS || now < this.#lightAt)) {
+      this.#lightAt = now;
+      this.#paintCaustics(light, now);
+      if (dapple) this.#paintDapple(now);
+    }
+    if (clear && this.#caustics && light.caustics > 0) {
+      ctx.globalAlpha = light.caustics;
+      ctx.drawImage(this.#caustics, 0, 0);
+      ctx.globalAlpha = 1;
+    }
     if (this.#canopyShade) {
       ctx.globalAlpha = env.weather === "rain" ? 0.12 : 0.24;
       ctx.drawImage(this.#canopyShade, 0, 0);
+      ctx.globalAlpha = 0.14;
+      if (dapple) ctx.drawImage(this.#dapple!, 0, 0);
       ctx.globalAlpha = 1;
-      if (env.time !== "night" && env.weather === "clear") this.#paintDapple(ctx, light, now, y0, y1);
     }
 
     if (this.#pads) ctx.drawImage(this.#pads, 0, 0);
@@ -887,14 +922,16 @@ export class PondPainter {
     ctx.globalAlpha = 1;
   }
 
-  /** Sunlight bent by the ripples, playing over the bed as a moving net. */
-  #paintCaustics(ctx: CanvasRenderingContext2D, light: Light, now: number, y0: number, y1: number) {
+  /** Sunlight bent by the ripples, playing slowly over the bed as a moving net. */
+  #paintCaustics(light: Light, now: number) {
+    const ctx = this.#caustics?.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, this.width, this.height);
     if (light.caustics <= 0) return;
-    const t = now / 1000;
+    const t = (now / 1000) * 0.7;
     const shore = this.#shore;
     ctx.fillStyle = light.sparkle;
-    ctx.globalAlpha = light.caustics;
-    for (let y = Math.max(0, y0); y < Math.min(this.height, y1); y++) {
+    for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
         if (y <= shore[x]!) continue;
         // Only in drifting patches, and thin, so it reads as light, not tiles.
@@ -906,18 +943,18 @@ export class PondPainter {
         if (Math.abs(v) < (patch - 0.45) * 0.5 * (0.4 + bayer(x, y))) ctx.fillRect(x, y, 1, 1);
       }
     }
-    ctx.globalAlpha = 1;
   }
 
-  /** Leaf shade drifting on the water under the tree. */
-  #paintDapple(ctx: CanvasRenderingContext2D, light: Light, now: number, y0: number, y1: number) {
+  /** Leaf shade drifting slowly on the water under the tree. */
+  #paintDapple(now: number) {
+    const ctx = this.#dapple?.getContext("2d");
     const canopy = this.canopy;
-    if (!canopy) return;
-    const t = now / 1000;
+    if (!ctx || !canopy) return;
+    ctx.clearRect(0, 0, this.width, this.height);
+    const t = (now / 1000) * 0.7;
     const reach = (canopy.x1 - canopy.x0) * 1.6;
-    ctx.fillStyle = light.shade;
-    ctx.globalAlpha = 0.14;
-    for (let y = Math.max(SHORE_ROWS, y0); y < Math.min(this.height, y1, 34); y++) {
+    ctx.fillStyle = this.#light.shade;
+    for (let y = SHORE_ROWS; y < Math.min(this.height, 34); y++) {
       for (let x = 0; x < this.width; x++) {
         const fromTree = this.#treeRight ? this.width - 1 - x : x;
         if (fromTree >= reach) continue;
@@ -930,7 +967,6 @@ export class PondPainter {
         if (n - fade * 0.45 > 0.42 + bayer(x, y) * 0.12) ctx.fillRect(x, y, 1, 1);
       }
     }
-    ctx.globalAlpha = 1;
   }
 
   /** Sun glints winking on the surface. */
@@ -938,12 +974,12 @@ export class PondPainter {
     const count = Math.max(4, Math.floor((this.width * (y1 - y0)) / 420));
     ctx.fillStyle = light.sparkle;
     for (let index = 0; index < count; index++) {
-      const twinkle = Math.sin(now * 0.0016 * (0.6 + hash(5, index, 2)) + index * 1.7);
+      const twinkle = Math.sin(now * 0.0011 * (0.6 + hash(5, index, 2)) + index * 1.7);
       if (twinkle < 0.6) continue;
       const x = Math.floor(hash(5, index, 1) * this.width);
       const y = Math.floor(y0 + hash(5, index, 3) * (y1 - y0));
       if (y <= this.#shore[x]! + 1) continue;
-      ctx.globalAlpha = Math.min(0.8, (twinkle - 0.6) * 2.4);
+      ctx.globalAlpha = Math.min(0.6, (twinkle - 0.6) * 1.8);
       ctx.fillRect(x, y, twinkle > 0.9 ? 2 : 1, 1);
     }
     ctx.globalAlpha = 1;

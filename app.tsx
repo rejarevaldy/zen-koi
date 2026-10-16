@@ -61,7 +61,7 @@ const KOI_ICON = "zen-koi/koi";
 const PAGE_PATH = "pond";
 const SETTINGS_ACTION = "pond-settings";
 
-const FRAME_MS = 33;
+const FRAME_MS = 40;
 /** Under reduced motion nothing moves; the pond only redraws for changes. */
 const STILL_FRAME_MS = 500;
 /** Hidden or off-screen ponds rest instead of swimming unseen. */
@@ -695,7 +695,7 @@ function CatchHud({ hud, grade }: { hud: Hud; grade: PoiGrade }) {
         {hud.status}. No.{grade} paper: {hud.paper * 10}% left.
       </span>
       {hud.news ? (
-        <Glass className="inline-flex max-w-full items-center whitespace-nowrap">
+        <Glass className="inline-flex max-w-full items-center whitespace-nowrap transition-opacity duration-700 starting:opacity-0">
           <span aria-hidden>{hud.status}</span>
         </Glass>
       ) : null}
@@ -915,7 +915,7 @@ function ThreadPond({
     content = (
       <section
         aria-label="Zen Koi"
-        className={`group relative overflow-hidden border border-border bg-card ${frame}`}
+        className={`group relative overflow-hidden border border-border bg-card transition-opacity duration-1000 starting:opacity-0 ${frame}`}
         style={borderColor ? { borderColor } : undefined}
       >
         <div

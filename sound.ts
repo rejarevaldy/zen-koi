@@ -1,7 +1,8 @@
 // The pond's sound, made on the fly with Web Audio: moving water, a wind chime
 // in the miyako-bushi scale, the odd knock of a shishi-odoshi, rain when it
 // rains, and small sounds for food, the poi, and the bowl. Nothing plays until
-// the player turns sound on, and it fades out whenever no pond is in view.
+// the player turns sound on, and it fades out whenever no pond is in view. The
+// chime and the knock ring out in a soft reverb.
 
 type Holder = symbol;
 
@@ -12,6 +13,8 @@ class Ambience {
   #context: AudioContext | null = null;
   #master: GainNode | null = null;
   #rainGain: GainNode | null = null;
+  /** A soft room for the chime and the bamboo knock, so they ring out instead of stopping short. */
+  #space: ConvolverNode | null = null;
   #enabled = false;
   #volume = 0.5;
   #rain = false;
@@ -56,12 +59,12 @@ class Ambience {
   }
 
   splash() {
-    this.#noiseBurst(1_100, 0.35, 0.12);
-    this.#blip(600, 220, 0.12, 0.08);
+    this.#noiseBurst(900, 0.4, 0.08);
+    this.#blip(560, 220, 0.14, 0.06);
   }
 
   tear() {
-    this.#noiseBurst(3_200, 0.14, 0.07, "highpass");
+    this.#noiseBurst(1_800, 0.18, 0.035);
   }
 
   #ensure() {
@@ -79,6 +82,12 @@ class Ambience {
     master.gain.value = 0;
     master.connect(context.destination);
     this.#master = master;
+    const space = context.createConvolver();
+    space.buffer = roomTail(context, 2.8);
+    const wet = context.createGain();
+    wet.gain.value = 0.35;
+    space.connect(wet).connect(master);
+    this.#space = space;
 
     // Water: brown noise through a low-pass whose cutoff drifts like lapping water.
     const water = context.createBufferSource();
@@ -167,8 +176,8 @@ class Ambience {
     if (!context || !master) return;
     const start = context.currentTime;
     for (const [frequency, level] of [
-      [820, 0.11],
-      [1_340, 0.05],
+      [820, 0.07],
+      [1_340, 0.03],
     ] as const) {
       const tone = context.createOscillator();
       tone.type = "triangle";
@@ -179,6 +188,7 @@ class Ambience {
       gain.gain.linearRampToValueAtTime(level, start + 0.004);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16);
       tone.connect(gain).connect(master);
+      if (this.#space) gain.connect(this.#space);
       tone.start(start);
       tone.stop(start + 0.2);
     }
@@ -201,6 +211,7 @@ class Ambience {
       gain.gain.linearRampToValueAtTime(level * share, start + 0.006);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + 3.2 / ratio);
       tone.connect(gain).connect(master);
+      if (this.#space) gain.connect(this.#space);
       tone.start(start);
       tone.stop(start + 3.4);
     }
@@ -244,6 +255,19 @@ function whiteNoise(context: AudioContext, seconds: number): AudioBuffer {
   const buffer = context.createBuffer(1, Math.ceil(context.sampleRate * seconds), context.sampleRate);
   const data = buffer.getChannelData(0);
   for (let index = 0; index < data.length; index++) data[index] = Math.random() * 2 - 1;
+  return buffer;
+}
+
+/** A decaying stereo noise tail: a quiet garden's echo for the convolver. */
+function roomTail(context: AudioContext, seconds: number): AudioBuffer {
+  const length = Math.ceil(context.sampleRate * seconds);
+  const buffer = context.createBuffer(2, length, context.sampleRate);
+  for (let channel = 0; channel < 2; channel++) {
+    const data = buffer.getChannelData(channel);
+    for (let index = 0; index < length; index++) {
+      data[index] = (Math.random() * 2 - 1) * (1 - index / length) ** 3;
+    }
+  }
   return buffer;
 }
 
