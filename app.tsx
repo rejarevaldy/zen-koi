@@ -934,9 +934,10 @@ function ThreadPond({
         >
           <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
         </div>
-        {/* Controls at the top right, shown while that corner is hovered or the pond has keyboard focus. */}
+        {/* Controls at the top right, shown while that corner is hovered or the pond has keyboard focus
+            (always, on touch screens). */}
         <div className="group/bar absolute top-1.5 right-1.5">
-          <div className="pointer-events-none flex items-center gap-0.5 rounded-lg bg-black/25 p-0.5 text-[11px] opacity-0 backdrop-blur-sm transition-opacity duration-300 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover/bar:pointer-events-auto group-hover/bar:opacity-100">
+          <div className="pointer-events-none flex items-center gap-0.5 rounded-lg bg-black/25 p-0.5 text-[11px] opacity-0 backdrop-blur-sm transition-opacity duration-300 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover/bar:pointer-events-auto group-hover/bar:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
             <button
               type="button"
               onClick={() => setViewOverride(threadId, view === "catch" ? "pond" : "catch")}
