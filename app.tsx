@@ -945,28 +945,28 @@ function ThreadPond({
         >
           <canvas ref={canvasRef} className="block" style={{ imageRendering: "pixelated" }} aria-hidden />
         </div>
-        <div className="absolute top-1.5 left-1.5">
+        <div className="absolute top-1.5 right-1.5 flex items-start gap-1.5">
           <ViewSwitch view={view ?? "pond"} onChange={setOverride} />
-        </div>
-        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-300 group-focus-within:opacity-100 group-hover:opacity-100">
-          <IconButton
-            label={sound.enabled ? "Mute the pond" : "Play the pond's sounds"}
-            icon={SOUND_ICON}
-            pressed={sound.enabled}
-            onClick={() => setSoundPrefs({ ...sound, enabled: !sound.enabled })}
-          />
-          <IconButton label="Open the Zen Pond" icon={EXPAND_ICON} onClick={openPage} />
-          <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
+          <div className="flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-300 group-focus-within:opacity-100 group-hover:opacity-100">
+            <IconButton
+              label={sound.enabled ? "Mute the pond" : "Play the pond's sounds"}
+              icon={SOUND_ICON}
+              pressed={sound.enabled}
+              onClick={() => setSoundPrefs({ ...sound, enabled: !sound.enabled })}
+            />
+            <IconButton label="Open the Zen Pond" icon={EXPAND_ICON} onClick={openPage} />
+            <IconButton label="Hide the pond" icon="ChevronDown" onClick={() => setHidden(true)} />
+          </div>
         </div>
         <div className="pointer-events-none absolute right-1.5 bottom-1.5 left-1.5 flex items-end justify-between gap-2">
-          <div className="min-w-0">
+          {hud.breath ? <BreathGuide phase={hud.breath} dotRef={breathDotRef} /> : null}
+          <div className="ml-auto min-w-0">
             {view === "catch" ? (
               <CatchHud hud={hud} grade={config.poi} />
             ) : summary ? (
               <CatchSummary session={summary} config={config} onDismiss={dismissSummary} />
             ) : null}
           </div>
-          {hud.breath ? <BreathGuide phase={hud.breath} dotRef={breathDotRef} /> : null}
         </div>
       </section>
     );
