@@ -13,8 +13,8 @@ bb plugin install git:https://github.com/rejarevaldy/zen-koi.git
 
 ## Features
 
-- **Watch.** Koi wander and rest. Draw the pointer through the water and it
-  parts behind it like a stick's wake; click to scatter food.
+- **Watch.** Koi glide and rest. Hold and drag through the water and it parts
+  behind you like a stick's wake; click to scatter food.
 - **Catch.** The poi moves by itself. When **!** shows, tap (or press Space) to
   scoop the koi into the bowl. After 15 seconds without a tap it plays by itself.
 - **Your koi.** Draw up to nine. They grow from 15 to 45 cm over two weeks.

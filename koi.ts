@@ -263,8 +263,8 @@ export function resizePond(
 }
 
 /** How long a stroke's wake lingers on the water. */
-export const WAKE_MS = 1_500;
-const MAX_WAKE = 360;
+export const WAKE_MS = 2_600;
+const MAX_WAKE = 600;
 
 /** Adds a point to the wake of a stroke moving along (dx, dy), a unit direction. */
 export function addWake(pond: Pond, x: number, y: number, dx: number, dy: number) {

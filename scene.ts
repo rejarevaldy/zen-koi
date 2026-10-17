@@ -442,6 +442,26 @@ export type KoiStyle = {
   dimAmount: number;
 };
 
+/**
+ * Draws a koi so it glides: its pixels stay whole pond pixels, laid out from
+ * its own position, and the whole koi moves in steps of one screen pixel (a
+ * third of a pond pixel) on a canvas drawn at PIXEL_SCALE.
+ */
+function drawGliding(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle) {
+  const fx = koi.x - Math.floor(koi.x);
+  const fy = koi.y - Math.floor(koi.y);
+  const settled: Koi = {
+    ...koi,
+    x: koi.x - fx,
+    y: koi.y - fy,
+    trail: koi.trail.map((point) => ({ x: point.x - fx, y: point.y - fy })),
+  };
+  ctx.save();
+  ctx.translate(Math.round(fx * PIXEL_SCALE) / PIXEL_SCALE, Math.round(fy * PIXEL_SCALE) / PIXEL_SCALE);
+  drawKoi(ctx, settled, style);
+  ctx.restore();
+}
+
 export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle, scale = 1) {
   const pixels = rasterizeKoi(koi, scale);
   if (style.shade) {
@@ -615,7 +635,7 @@ export class PondPainter {
     };
     const byDepth = pond.koi.filter((koi) => !koi.away).sort((a, b) => b.depth - a.depth);
     for (const koi of byDepth) {
-      if (koi.y > y0 - 20 && koi.y < y1 + 20) drawKoi(ctx, koi, style);
+      if (koi.y > y0 - 20 && koi.y < y1 + 20) drawGliding(ctx, koi, style);
     }
     if (sukui?.dipped) paintPoi(ctx, sukui, light, now);
 
@@ -1183,8 +1203,16 @@ function paintLanternGlow(ctx: CanvasRenderingContext2D, cx: number, cy: number,
 /** The paper poi: red hoop, paper that greys and gives way as it wears. */
 function paintPoi(ctx: CanvasRenderingContext2D, sukui: Sukui, light: Light, now: number) {
   if (sukui.torn && sukui.tornMs < 1_800) return;
-  const cx = sukui.x;
-  const cy = sukui.y;
+  // Glides like the koi: whole pixels, moved in screen-pixel steps.
+  const fx = sukui.x - Math.floor(sukui.x);
+  const fy = sukui.y - Math.floor(sukui.y);
+  ctx.save();
+  ctx.translate(Math.round(fx * PIXEL_SCALE) / PIXEL_SCALE, Math.round(fy * PIXEL_SCALE) / PIXEL_SCALE);
+  paintPoiAt(ctx, sukui, sukui.x - fx, sukui.y - fy, light, now);
+  ctx.restore();
+}
+
+function paintPoiAt(ctx: CanvasRenderingContext2D, sukui: Sukui, cx: number, cy: number, light: Light, now: number) {
   const r = POI_RADIUS;
   const under = sukui.dipped;
   const water = light.water[2]!;
@@ -1348,7 +1376,7 @@ function drawWake(
     const t = point.ageMs / WAKE_MS;
     const py = Math.round(point.y);
     if (t > 0.6 || py < SHORE_ROWS || py < y0 - 1 || py > y1) continue;
-    ctx.globalAlpha = 0.16 * (1 - t / 0.6);
+    ctx.globalAlpha = 0.14 * (1 - t / 0.6);
     ctx.fillRect(Math.round(point.x), py + 1, 1, 1);
   }
   ctx.fillStyle = color;
@@ -1358,7 +1386,7 @@ function drawWake(
     // Across the stroke, to either side.
     const nx = -point.dy;
     const ny = point.dx * 0.8;
-    const spread = 0.8 + t * 6;
+    const spread = 0.8 + t * 3.5;
     const plot = (x: number, y: number, alpha: number) => {
       const py = Math.round(y);
       if (py < SHORE_ROWS || py < y0 - 1 || py > y1) return;

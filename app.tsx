@@ -61,7 +61,7 @@ const KOI_ICON = "zen-koi/koi";
 const PAGE_PATH = "pond";
 const SETTINGS_ACTION = "pond-settings";
 
-const FRAME_MS = 40;
+const FRAME_MS = 33;
 /** A stroke through the water leaves a wake point this many pond pixels apart. */
 const STIR_SPACING = 1;
 /** The pond spends at most about a quarter of the time drawing, so a slow phone draws less often. */
@@ -472,6 +472,7 @@ function usePondLoop(options: LoopOptions): Hud {
     if (!active) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let frame = 0;
     let last = performance.now();
     let lastBreath: BreathPhase | null = null;
     let hudNow = EMPTY_HUD;
@@ -548,26 +549,23 @@ function usePondLoop(options: LoopOptions): Hud {
         // and stays pale on a light page with the koi still beneath the text.
         scrim = { color: look.background, alpha: look.dark ? 0.4 : 0.6, start: rows - 14, full: rows + 10 };
       }
+      // Drawn at one canvas pixel per screen pixel, so koi and the poi can glide
+      // between pond pixels; everything else stays whole pond pixels.
+      const paint = (target: HTMLCanvasElement, y0: number, count: number) => {
+        if (target.width !== width * PIXEL_SCALE) target.width = width * PIXEL_SCALE;
+        if (target.height !== count * PIXEL_SCALE) target.height = count * PIXEL_SCALE;
+        const ctx = target.getContext("2d");
+        if (!ctx) return;
+        ctx.setTransform(PIXEL_SCALE, 0, 0, PIXEL_SCALE, 0, 0);
+        world.painter.paint(ctx, world.pond, env, now, { y0, rows: count, scrim }, world.sukui);
+      };
       if (showCanvas) {
-        if (canvas.width !== width) canvas.width = width;
-        if (canvas.height !== rows) canvas.height = rows;
         // Whole pond pixels, so the strip and the chat input line up exactly.
         canvas.style.width = `${width * PIXEL_SCALE}px`;
         canvas.style.height = `${rows * PIXEL_SCALE}px`;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          world.painter.paint(ctx, world.pond, env, now, { y0: 0, rows, scrim }, world.sukui);
-        }
+        paint(canvas, 0, rows);
       }
-      if (showWater && waterSize) {
-        const target = water.canvas;
-        if (target.width !== width) target.width = width;
-        if (target.height !== below) target.height = below;
-        const ctx = target.getContext("2d");
-        if (ctx) {
-          world.painter.paint(ctx, world.pond, env, now, { y0: rows, rows: below, scrim }, world.sukui);
-        }
-      }
+      if (showWater && waterSize) paint(water.canvas, rows, below);
 
       const sukui = world.sukui;
       const next: Hud = {
@@ -585,12 +583,16 @@ function usePondLoop(options: LoopOptions): Hud {
       const delay = reducedMotion
         ? STILL_FRAME_MS
         : Math.min(SLOWEST_FRAME_MS, Math.max(FRAME_MS, workMs * FRAME_BUDGET));
-      timer = setTimeout(tick, Math.max(0, delay - (performance.now() - now)));
+      // Drawn on the screen's own refresh, so each step lands evenly.
+      timer = setTimeout(() => {
+        frame = requestAnimationFrame(tick);
+      }, Math.max(0, delay - (performance.now() - now) - 8));
     };
     tick();
     return () => {
       disposed = true;
       clearTimeout(timer);
+      cancelAnimationFrame(frame);
     };
   }, [active, canvasRef, latest]);
 
@@ -609,10 +611,11 @@ function usePondControls(
   const toPond = (event: PointerEvent<HTMLElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
+    // The canvas is laid out at PIXEL_SCALE CSS pixels per pond pixel.
     const rect = canvas.getBoundingClientRect();
     return {
-      x: ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width,
-      y: ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height,
+      x: (event.clientX - rect.left) / PIXEL_SCALE,
+      y: (event.clientY - rect.top) / PIXEL_SCALE,
     };
   };
   const play = (events: SukuiEvent[]) => {
@@ -623,21 +626,19 @@ function usePondControls(
     dropFood(world.pond, x, y, Math.random);
     ambience.plop();
   };
-  // Where the stroke last left a wake point, so the wake runs evenly along its path.
-  const stirRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  // While the pointer is held down in Pond view: where the stroke last left a wake
+  // point (so the wake runs evenly along its path), and how far it has gone.
+  const stirRef = useRef<{ x: number; y: number; at: number; travelled: number } | null>(null);
   return {
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
       const point = toPond(event);
       if (!point || view !== "pond") return;
       attend(world.pond, point.x, point.y);
-      // Like drawing a stick through the water: a wake that runs evenly along the
-      // path, filled in between pointer events, and parts to either side.
+      // Held and dragged, like drawing a stick through the water: a wake that runs
+      // evenly along the path, filled in between pointer events, parting to either side.
       const now = performance.now();
       const last = stirRef.current;
-      if (!last || now - last.at > 400) {
-        stirRef.current = { ...point, at: now };
-        return;
-      }
+      if (!last) return;
       const moved = Math.hypot(point.x - last.x, point.y - last.y);
       if (moved < STIR_SPACING) return;
       const dx = (point.x - last.x) / moved;
@@ -648,9 +649,24 @@ function usePondControls(
         const y = last.y + dy * index * STIR_SPACING;
         if (y > SHORE_ROWS + 1) addWake(world.pond, x, y, dx, dy);
       }
-      stirRef.current = { x: last.x + dx * steps * STIR_SPACING, y: last.y + dy * steps * STIR_SPACING, at: now };
+      stirRef.current = {
+        x: last.x + dx * steps * STIR_SPACING,
+        y: last.y + dy * steps * STIR_SPACING,
+        at: now,
+        travelled: last.travelled + steps * STIR_SPACING,
+      };
     },
     onPointerLeave: () => {
+      stirRef.current = null;
+    },
+    onPointerUp: (event: PointerEvent<HTMLElement>) => {
+      const stroke = stirRef.current;
+      stirRef.current = null;
+      // A click that did not stir scatters a little food where it landed.
+      const point = toPond(event);
+      if (stroke && point && view === "pond" && stroke.travelled < 3) feed(point.x, point.y);
+    },
+    onPointerCancel: () => {
       stirRef.current = null;
     },
     onPointerDown: (event: PointerEvent<HTMLElement>) => {
@@ -660,7 +676,8 @@ function usePondControls(
       if (view === "catch" && world.sukui) {
         play(tap(world.sukui, world.pond, Math.random));
       } else {
-        feed(point.x, point.y);
+        // Hold and drag to stir; a plain click feeds on release.
+        stirRef.current = { ...point, at: performance.now(), travelled: 0 };
       }
     },
     onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
@@ -1008,7 +1025,7 @@ function ThreadPond({
           aria-label={
             view === "catch"
               ? CATCH_HINT
-              : "Koi pond. Move across the water to stir it; click to scatter a little food."
+              : "Koi pond. Hold and drag to stir the water; click to scatter a little food."
           }
           className="block w-full cursor-pointer touch-none overflow-hidden outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           style={{ height: STRIP_ROWS * PIXEL_SCALE }}
@@ -1348,7 +1365,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
             aria-label={
               view === "catch"
                 ? CATCH_HINT
-                : "Koi pond. Move across the water to stir it; click to scatter a little food."
+                : "Koi pond. Hold and drag to stir the water; click to scatter a little food."
             }
             className="block w-full cursor-pointer touch-none overflow-hidden outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
             style={{ height: (threadId ? STRIP_ROWS : PAGE_ROWS) * PIXEL_SCALE }}
