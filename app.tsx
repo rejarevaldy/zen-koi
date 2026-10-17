@@ -46,7 +46,7 @@ import {
   type View,
   type WeatherChoice,
 } from "./config.ts";
-import { addRipple, attend, breathAt, dropFood, portraitKoi, type BreathPhase } from "./koi.ts";
+import { addRipple, addWake, attend, breathAt, dropFood, portraitKoi, type BreathPhase } from "./koi.ts";
 import { drawKoiPortrait, PIXEL_SCALE, SHORE_ROWS, STRIP_ROWS, type Scrim } from "./scene.ts";
 import { isAuto, tap, type Sukui, type SukuiEvent } from "./sukui.ts";
 import { advanceWorld, createWorld, environmentFor, type World } from "./world.ts";
@@ -62,8 +62,8 @@ const PAGE_PATH = "pond";
 const SETTINGS_ACTION = "pond-settings";
 
 const FRAME_MS = 40;
-/** A stroke through the water leaves a ring this many pond pixels apart. */
-const STIR_SPACING = 5;
+/** A stroke through the water leaves a wake point this many pond pixels apart. */
+const STIR_SPACING = 1;
 /** The pond spends at most about a quarter of the time drawing, so a slow phone draws less often. */
 const FRAME_BUDGET = 4;
 const SLOWEST_FRAME_MS = 100;
@@ -623,15 +623,15 @@ function usePondControls(
     dropFood(world.pond, x, y, Math.random);
     ambience.plop();
   };
-  // Where the stroke last left a ring, so rings fall evenly along its path.
+  // Where the stroke last left a wake point, so the wake runs evenly along its path.
   const stirRef = useRef<{ x: number; y: number; at: number } | null>(null);
   return {
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
       const point = toPond(event);
       if (!point || view !== "pond") return;
       attend(world.pond, point.x, point.y);
-      // Trailing a finger through the water: soft rings spaced evenly along the path,
-      // filling in between pointer events, a little wider for a quicker stroke.
+      // Like drawing a stick through the water: a wake that runs evenly along the
+      // path, filled in between pointer events, and parts to either side.
       const now = performance.now();
       const last = stirRef.current;
       if (!last || now - last.at > 400) {
@@ -640,17 +640,15 @@ function usePondControls(
       }
       const moved = Math.hypot(point.x - last.x, point.y - last.y);
       if (moved < STIR_SPACING) return;
-      const speed = moved / Math.max(0.016, (now - last.at) / 1000);
-      const radius = Math.min(5, 2.5 + speed / 60);
-      const rings = Math.min(3, Math.floor(moved / STIR_SPACING));
-      for (let index = 1; index <= rings; index++) {
-        const t = (index * STIR_SPACING) / moved;
-        const x = last.x + (point.x - last.x) * t;
-        const y = last.y + (point.y - last.y) * t;
-        if (y > SHORE_ROWS + 1) addRipple(world.pond, x, y, radius, 5);
+      const dx = (point.x - last.x) / moved;
+      const dy = (point.y - last.y) / moved;
+      const steps = Math.min(48, Math.floor(moved / STIR_SPACING));
+      for (let index = 1; index <= steps; index++) {
+        const x = last.x + dx * index * STIR_SPACING;
+        const y = last.y + dy * index * STIR_SPACING;
+        if (y > SHORE_ROWS + 1) addWake(world.pond, x, y, dx, dy);
       }
-      const t = (rings * STIR_SPACING) / moved;
-      stirRef.current = { x: last.x + (point.x - last.x) * t, y: last.y + (point.y - last.y) * t, at: now };
+      stirRef.current = { x: last.x + dx * steps * STIR_SPACING, y: last.y + dy * steps * STIR_SPACING, at: now };
     },
     onPointerLeave: () => {
       stirRef.current = null;

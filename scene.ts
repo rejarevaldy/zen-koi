@@ -3,7 +3,7 @@
 // pond world; each canvas (the strip, the chat input, the pond page) paints its
 // own band of rows from it, so the water runs on from one into the next.
 
-import { bodyPoint, seededRng, type Drift, type Koi, type Pond, type Region } from "./koi.ts";
+import { bodyPoint, seededRng, WAKE_MS, type Drift, type Koi, type Pond, type Region } from "./koi.ts";
 import { BITE_MS, POI_RADIUS, type Sukui } from "./sukui.ts";
 import type { PondConfig, Season, TimeOfDay, Weather } from "./config.ts";
 
@@ -649,6 +649,7 @@ export class PondPainter {
     ctx.globalAlpha = 1;
     drawDrifts(ctx, pond, now, true);
     drawRipples(ctx, pond, light.sparkle, y0, y1);
+    drawWake(ctx, pond, light.sparkle, light.shade, y0, y1);
 
     if (env.time === "night" && env.weather === "clear") this.#paintMoon(ctx, light, now);
     if (clear && (env.time === "day" || env.time === "dawn")) this.#paintGlints(ctx, light, now, y0, y1);
@@ -1324,6 +1325,49 @@ function drawRipples(ctx: CanvasRenderingContext2D, pond: Pond, color: string, y
     };
     ring(radius, fade * 0.6);
     if (radius > 3) ring(radius - 2.5, fade * 0.25);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * The wake of a stick drawn through the water: a thin bright line where it
+ * passed, and two lines parting from it on either side, spreading and fading.
+ */
+function drawWake(
+  ctx: CanvasRenderingContext2D,
+  pond: Pond,
+  color: string,
+  shade: string,
+  y0: number,
+  y1: number,
+) {
+  if (pond.wake.length === 0) return;
+  // The groove the stick leaves, darker, under the bright lines.
+  ctx.fillStyle = shade;
+  for (const point of pond.wake) {
+    const t = point.ageMs / WAKE_MS;
+    const py = Math.round(point.y);
+    if (t > 0.6 || py < SHORE_ROWS || py < y0 - 1 || py > y1) continue;
+    ctx.globalAlpha = 0.16 * (1 - t / 0.6);
+    ctx.fillRect(Math.round(point.x), py + 1, 1, 1);
+  }
+  ctx.fillStyle = color;
+  for (const point of pond.wake) {
+    const t = point.ageMs / WAKE_MS;
+    const fade = (1 - t) * (1 - t);
+    // Across the stroke, to either side.
+    const nx = -point.dy;
+    const ny = point.dx * 0.8;
+    const spread = 0.8 + t * 6;
+    const plot = (x: number, y: number, alpha: number) => {
+      const py = Math.round(y);
+      if (py < SHORE_ROWS || py < y0 - 1 || py > y1) return;
+      ctx.globalAlpha = alpha;
+      ctx.fillRect(Math.round(x), py, 1, 1);
+    };
+    if (t < 0.45) plot(point.x, point.y, 0.55 * (1 - t / 0.45));
+    plot(point.x + nx * spread, point.y + ny * spread, 0.45 * fade);
+    plot(point.x - nx * spread, point.y - ny * spread, 0.45 * fade);
   }
   ctx.globalAlpha = 1;
 }

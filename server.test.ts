@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readPond } from "./server.ts";
+import { pondSchema, readPond } from "./server.ts";
 
 test("a pond saved by 0.2 keeps its koi, garden, and ambience", () => {
   const old = {

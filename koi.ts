@@ -40,6 +40,8 @@ export type Koi = {
 
 export type Food = { id: number; x: number; y: number; ageMs: number };
 export type Ripple = { x: number; y: number; ageMs: number; maxRadius: number; speed: number };
+/** One point of the wake a stroke leaves, with the direction the stroke was moving. */
+export type WakePoint = { x: number; y: number; dx: number; dy: number; ageMs: number };
 export type DriftKind = "petal" | "leaf" | "snow" | "firefly";
 export type Drift = {
   kind: DriftKind;
@@ -68,6 +70,8 @@ export type Pond = {
   koi: Koi[];
   food: Food[];
   ripples: Ripple[];
+  /** The wake of a pointer stroked through the water, newest last. */
+  wake: WakePoint[];
   drifts: Drift[];
   nextFoodId: number;
   /** Time until a koi next sips at the surface. */
@@ -111,6 +115,7 @@ export function newPond(width: number, height: number, top: number, focusBottom 
     koi: [],
     food: [],
     ripples: [],
+    wake: [],
     drifts: [],
     nextFoodId: 1,
     ambientMs: 4_000,
@@ -257,6 +262,16 @@ export function resizePond(
   pond.food = pond.food.filter((food) => food.x < width && food.y < height);
 }
 
+/** How long a stroke's wake lingers on the water. */
+export const WAKE_MS = 1_500;
+const MAX_WAKE = 360;
+
+/** Adds a point to the wake of a stroke moving along (dx, dy), a unit direction. */
+export function addWake(pond: Pond, x: number, y: number, dx: number, dy: number) {
+  pond.wake.push({ x, y, dx, dy, ageMs: 0 });
+  if (pond.wake.length > MAX_WAKE) pond.wake.shift();
+}
+
 export function addRipple(pond: Pond, x: number, y: number, maxRadius = 6, speed = 7) {
   pond.ripples.push({ x, y, ageMs: 0, maxRadius, speed });
   if (pond.ripples.length > MAX_RIPPLES) pond.ripples.shift();
@@ -304,6 +319,8 @@ export function stepPond(pond: Pond, dtMs: number, context: StepContext) {
   for (const koi of pond.koi) if (!koi.away) stepKoi(pond, koi, dt, rng);
 
   for (const ripple of pond.ripples) ripple.ageMs += dtMs;
+  for (const point of pond.wake) point.ageMs += dtMs;
+  while (pond.wake[0] && pond.wake[0].ageMs >= WAKE_MS) pond.wake.shift();
   pond.ripples = pond.ripples.filter(
     (ripple) => (ripple.ageMs / 1000) * ripple.speed < ripple.maxRadius,
   );
