@@ -21,6 +21,8 @@ bb plugin install git:https://github.com/rejarevaldy/zen-koi.git
 - **Garden and weather.** Lantern, tree, lily pads, seasons, time of day, and
   rain.
 - **Sound.** Water, a wind chime, and rain. Off until you turn it on.
+- **Phones.** The pond draws less often on a slow device, and you can turn it
+  off on phones in the settings.
 
 Open **Zen Pond** from the navigation rail, or the settings button on the pond,
 to change any of these.

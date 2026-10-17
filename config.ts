@@ -75,7 +75,8 @@ export type PondConfig = {
     breathing: boolean;
   };
   /** What the strip shows while the agent works, and when it is idle. */
-  views: { working: View; idle: IdleView };
+  /** `phones: false` keeps the pond off on phones; missing means shown. */
+  views: { working: View; idle: IdleView; phones?: boolean };
   poi: PoiGrade;
 };
 

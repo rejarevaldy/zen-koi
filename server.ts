@@ -59,7 +59,9 @@ const ambienceSchema = z
   })
   .strict();
 
-const viewsSchema = z.object({ working: z.enum(VIEWS), idle: z.enum(IDLE_VIEWS) }).strict();
+const viewsSchema = z
+  .object({ working: z.enum(VIEWS), idle: z.enum(IDLE_VIEWS), phones: z.boolean().optional() })
+  .strict();
 
 export const pondSchema = z
   .object({

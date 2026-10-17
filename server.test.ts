@@ -33,3 +33,10 @@ test("a pond saved with the retired text look keeps everything else", () => {
   assert.deepEqual(pond.layout, saved.layout);
   assert.equal("style" in pond, false);
 });
+
+test("the phones setting is kept, and ponds saved without it stay valid", () => {
+  const pond = readPond(undefined, Date.now());
+  assert.equal(pondSchema.safeParse(pond).success, true);
+  const off = { ...pond, views: { ...pond.views, phones: false } };
+  assert.deepEqual(readPond(off, Date.now()).views, off.views);
+});

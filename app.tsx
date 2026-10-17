@@ -62,8 +62,12 @@ const PAGE_PATH = "pond";
 const SETTINGS_ACTION = "pond-settings";
 
 const FRAME_MS = 40;
-/** At most one ring this often while the pointer stirs the water. */
-const STIR_MS = 90;
+/** A stroke through the water leaves a ring this many pond pixels apart. */
+const STIR_SPACING = 5;
+/** The pond spends at most about a quarter of the time drawing, so a slow phone draws less often. */
+const FRAME_BUDGET = 4;
+const SLOWEST_FRAME_MS = 100;
+const PHONE_QUERY = "(pointer: coarse) and (max-width: 820px)";
 /** Under reduced motion nothing moves; the pond only redraws for changes. */
 const STILL_FRAME_MS = 500;
 /** Hidden or off-screen ponds rest instead of swimming unseen. */
@@ -282,6 +286,19 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
+function usePhone(): boolean {
+  const [phone, setPhone] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(PHONE_QUERY).matches,
+  );
+  useEffect(() => {
+    const query = window.matchMedia(PHONE_QUERY);
+    const onChange = () => setPhone(query.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+  return phone;
+}
+
 function useStoredFlag(key: string): [boolean, (value: boolean) => void] {
   const [value, setValue] = useState(() => {
     try {
@@ -458,6 +475,8 @@ function usePondLoop(options: LoopOptions): Hud {
     let last = performance.now();
     let lastBreath: BreathPhase | null = null;
     let hudNow = EMPTY_HUD;
+    // How long a frame takes to step and draw here, smoothed.
+    let workMs = 0;
 
     const tick = () => {
       if (disposed) return;
@@ -562,7 +581,10 @@ function usePondLoop(options: LoopOptions): Hud {
         hudNow = next;
         setHud(next);
       }
-      const delay = reducedMotion ? STILL_FRAME_MS : FRAME_MS;
+      workMs = workMs * 0.9 + (performance.now() - now) * 0.1;
+      const delay = reducedMotion
+        ? STILL_FRAME_MS
+        : Math.min(SLOWEST_FRAME_MS, Math.max(FRAME_MS, workMs * FRAME_BUDGET));
       timer = setTimeout(tick, Math.max(0, delay - (performance.now() - now)));
     };
     tick();
@@ -601,24 +623,34 @@ function usePondControls(
     dropFood(world.pond, x, y, Math.random);
     ambience.plop();
   };
-  // Where the pointer last stirred the water, so a stroke leaves a trail of rings.
+  // Where the stroke last left a ring, so rings fall evenly along its path.
   const stirRef = useRef<{ x: number; y: number; at: number } | null>(null);
   return {
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
       const point = toPond(event);
       if (!point || view !== "pond") return;
       attend(world.pond, point.x, point.y);
-      // Trailing a finger through the water: a small ring every few pixels, bigger for a quick stroke.
+      // Trailing a finger through the water: soft rings spaced evenly along the path,
+      // filling in between pointer events, a little wider for a quicker stroke.
       const now = performance.now();
       const last = stirRef.current;
-      const moved = last ? Math.hypot(point.x - last.x, point.y - last.y) : 0;
       if (!last || now - last.at > 400) {
         stirRef.current = { ...point, at: now };
-      } else if (moved >= 3 && now - last.at >= STIR_MS && point.y > SHORE_ROWS) {
-        const speed = moved / ((now - last.at) / 1000);
-        addRipple(world.pond, point.x, point.y, Math.min(6, 2.5 + speed / 40), 6);
-        stirRef.current = { ...point, at: now };
+        return;
       }
+      const moved = Math.hypot(point.x - last.x, point.y - last.y);
+      if (moved < STIR_SPACING) return;
+      const speed = moved / Math.max(0.016, (now - last.at) / 1000);
+      const radius = Math.min(5, 2.5 + speed / 60);
+      const rings = Math.min(3, Math.floor(moved / STIR_SPACING));
+      for (let index = 1; index <= rings; index++) {
+        const t = (index * STIR_SPACING) / moved;
+        const x = last.x + (point.x - last.x) * t;
+        const y = last.y + (point.y - last.y) * t;
+        if (y > SHORE_ROWS + 1) addRipple(world.pond, x, y, radius, 5);
+      }
+      const t = (rings * STIR_SPACING) / moved;
+      stirRef.current = { x: last.x + (point.x - last.x) * t, y: last.y + (point.y - last.y) * t, at: now };
     },
     onPointerLeave: () => {
       stirRef.current = null;
@@ -870,7 +902,8 @@ function ThreadPond({
       ? "pond"
       : null;
   const view = override ?? defaultView;
-  const open = view !== null;
+  const phone = usePhone();
+  const open = view !== null && !(phone && config.views.phones === false);
   const showPond = open && !hidden && !compact;
   const flooded = open && !hidden;
 
@@ -1383,6 +1416,17 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
                 options={[
                   { value: "pond", label: "Pond" },
                   { value: "hidden", label: "Hidden" },
+                ]}
+              />
+            </Row>
+            <Row label="On phones">
+              <Segmented<"show" | "off">
+                label="On phones"
+                value={config.views.phones === false ? "off" : "show"}
+                onChange={(choice) => update({ views: { ...config.views, phones: choice === "show" } })}
+                options={[
+                  { value: "show", label: "Show" },
+                  { value: "off", label: "Off" },
                 ]}
               />
             </Row>

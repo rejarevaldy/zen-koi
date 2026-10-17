@@ -1311,18 +1311,15 @@ function drawRipples(ctx: CanvasRenderingContext2D, pond: Pond, color: string, y
     const radius = (ripple.ageMs / 1000) * ripple.speed;
     if (radius < 0.5 || ripple.y + radius < y0 || ripple.y - radius > y1) continue;
     const fade = 1 - radius / ripple.maxRadius;
-    const drawn = new Set<number>();
+    // About one point per pixel of circumference: no gaps, and little overdraw to track.
     const ring = (r: number, alpha: number) => {
       ctx.globalAlpha = alpha;
-      const steps = Math.max(8, Math.ceil(r * 7));
+      const steps = Math.max(8, Math.ceil(r * 5.4));
       for (let index = 0; index < steps; index++) {
         const angle = (index / steps) * Math.PI * 2;
-        const x = Math.round(ripple.x + Math.cos(angle) * r);
         const y = Math.round(ripple.y + Math.sin(angle) * r * 0.8);
-        const key = keyOf(x, y);
-        if (y < SHORE_ROWS || drawn.has(key)) continue;
-        drawn.add(key);
-        ctx.fillRect(x, y, 1, 1);
+        if (y < SHORE_ROWS) continue;
+        ctx.fillRect(Math.round(ripple.x + Math.cos(angle) * r), y, 1, 1);
       }
     };
     ring(radius, fade * 0.6);
