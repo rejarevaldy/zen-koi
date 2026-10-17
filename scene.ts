@@ -477,36 +477,41 @@ export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle
     ctx.fillStyle = style.shade;
     for (const key of pixels.keys()) ctx.fillRect(xOf(key) + ox, yOf(key) + oy, 1, 1);
   }
-  // A dark line of water around the body, so the koi stands out from the water
-  // and the bed at any depth; fins stay soft, with no line.
+  // A soft line of darker water only along the lower and right edges, as if
+  // lit from the upper left: enough to lift the koi off the water, never a hard
+  // contour. Fins stay soft, with no line.
   const outline = new Set<number>();
   for (const [key, pixel] of pixels) {
     if (pixel.fin) continue;
-    for (const next of [key + 1, key - 1, key + KEY_WIDTH, key - KEY_WIDTH]) {
+    for (const next of [key + 1, key + KEY_WIDTH]) {
       if (!pixels.has(next)) outline.add(next);
     }
   }
-  ctx.globalAlpha = 0.55 * (1 - koi.depth * 0.5);
-  ctx.fillStyle = mix(style.water, "#081014", 0.65);
+  ctx.globalAlpha = 0.3 * (1 - koi.depth * 0.6);
+  ctx.fillStyle = mix(style.water, "#081014", 0.55);
   for (const key of outline) ctx.fillRect(xOf(key), yOf(key), 1, 1);
 
   // A koi has only a few colors: shade each once, then fill its pixels together.
-  // Kept clear: only a little water tint with depth, and little dimming at night.
-  const depth = koi.depth * 0.25;
+  // Its edge pixels are a little see-through, so the silhouette melts into the
+  // water instead of stepping.
+  const depth = koi.depth * 0.32;
+  const isEdge = (key: number) =>
+    !pixels.has(key + 1) || !pixels.has(key - 1) || !pixels.has(key + KEY_WIDTH) || !pixels.has(key - KEY_WIDTH);
   const groups = new Map<string, number[]>();
   for (const [key, pixel] of pixels) {
-    const group = (pixel.fin ? "f" : "b") + pixel.color;
+    const group = (pixel.fin ? "f" : isEdge(key) ? "e" : "b") + pixel.color;
     const keys = groups.get(group);
     if (keys) keys.push(key);
     else groups.set(group, [key]);
   }
   for (const [group, keys] of groups) {
     const fin = group[0] === "f";
+    const edge = group[0] === "e";
     const color = group.slice(1);
     let shade = fin ? mix(color, style.water, 0.4) : color;
     shade = mix(shade, style.water, depth);
-    if (style.dimAmount > 0) shade = mix(shade, style.dim, style.dimAmount * 0.25);
-    ctx.globalAlpha = fin ? 0.8 : 1;
+    if (style.dimAmount > 0) shade = mix(shade, style.dim, style.dimAmount * 0.3);
+    ctx.globalAlpha = fin ? 0.8 : edge ? 0.78 : 1;
     ctx.fillStyle = shade;
     for (const key of keys) ctx.fillRect(xOf(key), yOf(key), 1, 1);
   }
