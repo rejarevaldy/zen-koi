@@ -291,9 +291,9 @@ function koiColor(koi: Koi, u: number, v: number, px: number, py: number): strin
     case "yamabuki":
       return across < 0.3 ? "#fff0a0" : scale ? "#f0cb48" : "#f6d861";
     case "asagi":
-      if (u < 0.12) return "#dce5e8";
-      if (across > 0.6) return "#e27c3c";
-      return scale ? "#5c7c96" : "#7c9bb3";
+      if (u < 0.12) return "#e6eef0";
+      if (across > 0.6) return "#ec8a46";
+      return scale ? "#8fb0c8" : "#aac6d8";
     case "chagoi":
       if (across < 0.28) return "#c08c58";
       return scale ? "#96663c" : "#a97846";
@@ -323,11 +323,15 @@ function finColor(koi: Koi): string {
   }
 }
 
-/** Half-width of the body at `u`: a rounded head, broad shoulders, slim tail. */
+/**
+ * Half-width of the body at `u`: a blunt rounded head, broad shoulders a third
+ * of the way back, and a slim stem before the tail, so it reads as a koi.
+ */
 function radiusAt(u: number): number {
-  if (u < 0.1) return 1.4 + (u / 0.1) * 0.95;
-  if (u < 0.32) return 2.35 + ((u - 0.1) / 0.22) * 0.45;
-  return 2.8 - ((u - 0.32) / 0.68) * 2.15;
+  if (u < 0.12) return 1.7 + Math.sqrt(u / 0.12) * 1.1;
+  if (u < 0.34) return 2.8 + ((u - 0.12) / 0.22) * 0.4;
+  if (u < 0.85) return 3.2 - ((u - 0.34) / 0.51) * 2.3;
+  return 0.9 - ((u - 0.85) / 0.15) * 0.25;
 }
 
 const KEY_WIDTH = 1 << 14;
@@ -363,9 +367,9 @@ function rasterizeKoi(koi: Koi, scale = 1): Map<number, KoiPixel> {
   const back = unit(tail.x - before.x, tail.y - before.y);
   const side = { x: -back.y, y: back.x };
   const flick = Math.sin(koi.phase - 3.8) * 1.1 * scale;
-  const tailLength = 4 * scale;
+  const tailLength = 4.5 * scale;
   for (let k = 0.5; k <= tailLength; k += 0.5) {
-    const spread = (0.6 + (k / scale) * 0.62) * scale;
+    const spread = (0.7 + (k / scale) * 0.72) * scale;
     for (let across = -spread; across <= spread; across += 0.5) {
       // A notch in the middle of the trailing edge splits the fan in two.
       if (k > tailLength * 0.62 && Math.abs(across) < spread * 0.42) continue;
@@ -421,7 +425,7 @@ function rasterizeKoi(koi: Koi, scale = 1): Map<number, KoiPixel> {
   }
 
   // Eyes, once the koi is big enough to show them.
-  if (length >= 11) {
+  if (length >= 6) {
     const eye = at(1.2 * scale);
     const across = { x: -headDirection.y, y: headDirection.x };
     const reach = radiusAt(0.1) * scale * 0.8;
@@ -473,9 +477,22 @@ export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle
     ctx.fillStyle = style.shade;
     for (const key of pixels.keys()) ctx.fillRect(xOf(key) + ox, yOf(key) + oy, 1, 1);
   }
+  // A dark line of water around the body, so the koi stands out from the water
+  // and the bed at any depth; fins stay soft, with no line.
+  const outline = new Set<number>();
+  for (const [key, pixel] of pixels) {
+    if (pixel.fin) continue;
+    for (const next of [key + 1, key - 1, key + KEY_WIDTH, key - KEY_WIDTH]) {
+      if (!pixels.has(next)) outline.add(next);
+    }
+  }
+  ctx.globalAlpha = 0.55 * (1 - koi.depth * 0.5);
+  ctx.fillStyle = mix(style.water, "#081014", 0.65);
+  for (const key of outline) ctx.fillRect(xOf(key), yOf(key), 1, 1);
+
   // A koi has only a few colors: shade each once, then fill its pixels together.
   // Kept clear: only a little water tint with depth, and little dimming at night.
-  const depth = koi.depth * 0.42;
+  const depth = koi.depth * 0.25;
   const groups = new Map<string, number[]>();
   for (const [key, pixel] of pixels) {
     const group = (pixel.fin ? "f" : "b") + pixel.color;
@@ -488,7 +505,7 @@ export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle
     const color = group.slice(1);
     let shade = fin ? mix(color, style.water, 0.4) : color;
     shade = mix(shade, style.water, depth);
-    if (style.dimAmount > 0) shade = mix(shade, style.dim, style.dimAmount * 0.35);
+    if (style.dimAmount > 0) shade = mix(shade, style.dim, style.dimAmount * 0.25);
     ctx.globalAlpha = fin ? 0.8 : 1;
     ctx.fillStyle = shade;
     for (const key of keys) ctx.fillRect(xOf(key), yOf(key), 1, 1);

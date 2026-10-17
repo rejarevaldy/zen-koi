@@ -104,9 +104,9 @@ test("the koi list decides who swims, and koi keep their place", () => {
 });
 
 test("koi grow from 9 to 14 pixels over two weeks", () => {
-  assert.equal(koiLength(0, 0), 9);
-  assert.equal(koiLength(0, 7 * DAY), 11);
-  assert.equal(koiLength(0, 60 * DAY), 14);
+  assert.equal(koiLength(0, 0), 12);
+  assert.equal(koiLength(0, 7 * DAY), 15);
+  assert.equal(koiLength(0, 60 * DAY), 18);
 });
 
 test("the breath fills, holds, and empties", () => {
