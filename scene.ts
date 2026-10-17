@@ -1393,7 +1393,7 @@ function drawWake(
     const t = point.ageMs / WAKE_MS;
     const py = Math.round(point.y);
     if (t > 0.6 || py < SHORE_ROWS || py < y0 - 1 || py > y1) continue;
-    ctx.globalAlpha = 0.14 * (1 - t / 0.6);
+    ctx.globalAlpha = 0.14 * point.strength * (1 - t / 0.6);
     ctx.fillRect(Math.round(point.x), py + 1, 1, 1);
   }
   ctx.fillStyle = color;
@@ -1403,16 +1403,18 @@ function drawWake(
     // Across the stroke, to either side.
     const nx = -point.dy;
     const ny = point.dx * 0.8;
-    const spread = 0.8 + t * 3.5;
+    // A quick stroke parts the water wider and brighter than a slow one.
+    const spread = 0.8 + t * (2 + point.strength * 2.5);
+    const ink = 0.35 + point.strength * 0.65;
     const plot = (x: number, y: number, alpha: number) => {
       const py = Math.round(y);
       if (py < SHORE_ROWS || py < y0 - 1 || py > y1) return;
       ctx.globalAlpha = alpha;
       ctx.fillRect(Math.round(x), py, 1, 1);
     };
-    if (t < 0.45) plot(point.x, point.y, 0.55 * (1 - t / 0.45));
-    plot(point.x + nx * spread, point.y + ny * spread, 0.45 * fade);
-    plot(point.x - nx * spread, point.y - ny * spread, 0.45 * fade);
+    if (t < 0.45) plot(point.x, point.y, 0.55 * ink * (1 - t / 0.45));
+    plot(point.x + nx * spread, point.y + ny * spread, 0.5 * ink * fade);
+    plot(point.x - nx * spread, point.y - ny * spread, 0.5 * ink * fade);
   }
   ctx.globalAlpha = 1;
 }

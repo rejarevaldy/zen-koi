@@ -58,6 +58,11 @@ class Ambience {
     this.#blip(520, 170, 0.13, 0.1);
   }
 
+  /** Water swished by a stick; louder for a quicker stroke (0 to 1). */
+  swish(strength: number) {
+    this.#noiseBurst(500 + strength * 500, 0.22, 0.012 + strength * 0.028);
+  }
+
   dip() {
     this.#noiseBurst(700, 0.22, 0.06);
     this.#blip(330, 160, 0.16, 0.05);

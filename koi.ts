@@ -40,8 +40,11 @@ export type Koi = {
 
 export type Food = { id: number; x: number; y: number; ageMs: number };
 export type Ripple = { x: number; y: number; ageMs: number; maxRadius: number; speed: number };
-/** One point of the wake a stroke leaves, with the direction the stroke was moving. */
-export type WakePoint = { x: number; y: number; dx: number; dy: number; ageMs: number };
+/**
+ * One point of the wake a stroke leaves: the direction the stroke was moving,
+ * and how strong it was (0.35 for a slow stroke, up to 1 for a quick one).
+ */
+export type WakePoint = { x: number; y: number; dx: number; dy: number; strength: number; ageMs: number };
 export type DriftKind = "petal" | "leaf" | "snow" | "firefly";
 export type Drift = {
   kind: DriftKind;
@@ -267,9 +270,43 @@ export const WAKE_MS = 2_600;
 const MAX_WAKE = 600;
 
 /** Adds a point to the wake of a stroke moving along (dx, dy), a unit direction. */
-export function addWake(pond: Pond, x: number, y: number, dx: number, dy: number) {
-  pond.wake.push({ x, y, dx, dy, ageMs: 0 });
+export function addWake(pond: Pond, x: number, y: number, dx: number, dy: number, strength = 1) {
+  pond.wake.push({ x, y, dx, dy, strength, ageMs: 0 });
   if (pond.wake.length > MAX_WAKE) pond.wake.shift();
+}
+
+/** Above this speed (pond pixels a second), a stroke startles koi close to it. */
+const STARTLE_SPEED = 25;
+
+/**
+ * A stick drawn through the water at (x, y), moving along (dx, dy) at `speed`
+ * pond pixels a second: floating food and petals near it are carried along,
+ * and koi close to a quick stroke dart away, then settle by themselves.
+ */
+export function stir(pond: Pond, x: number, y: number, dx: number, dy: number, speed: number) {
+  const push = Math.min(1.2, speed / 60);
+  const carry = (thing: { x: number; y: number }) => {
+    const distance = Math.hypot(thing.x - x, thing.y - y);
+    if (distance > 5) return;
+    const falloff = 1 - distance / 5;
+    thing.x = clamp(thing.x + dx * push * falloff, 1, pond.width - 1);
+    thing.y = clamp(thing.y + dy * push * falloff * 0.8, pond.top + 1, pond.height - 1);
+  };
+  for (const food of pond.food) carry(food);
+  for (const drift of pond.drifts) if (drift.landed) carry(drift);
+  if (speed < STARTLE_SPEED) return;
+  for (const koi of pond.koi) {
+    if (koi.away) continue;
+    const away = Math.hypot(koi.x - x, koi.y - y);
+    if (away > 8) continue;
+    const ux = (koi.x - x) / (away || 1);
+    const uy = (koi.y - y) / (away || 1);
+    koi.tx = clamp(koi.x + ux * 22, 2, pond.width - 2);
+    koi.ty = clamp(koi.y + uy * 8, pond.top + 2, pond.height - 2);
+    koi.targetSpeed = 7;
+    koi.restMs = 0;
+    koi.chasing = null;
+  }
 }
 
 export function addRipple(pond: Pond, x: number, y: number, maxRadius = 6, speed = 7) {

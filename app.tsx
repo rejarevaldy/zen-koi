@@ -46,7 +46,7 @@ import {
   type View,
   type WeatherChoice,
 } from "./config.ts";
-import { addRipple, addWake, attend, breathAt, dropFood, portraitKoi, type BreathPhase } from "./koi.ts";
+import { addRipple, addWake, attend, breathAt, dropFood, portraitKoi, stir, type BreathPhase } from "./koi.ts";
 import { drawKoiPortrait, PIXEL_SCALE, SHORE_ROWS, STRIP_ROWS, type Scrim } from "./scene.ts";
 import { isAuto, tap, type Sukui, type SukuiEvent } from "./sukui.ts";
 import { advanceWorld, createWorld, environmentFor, type World } from "./world.ts";
@@ -629,6 +629,7 @@ function usePondControls(
   // While the pointer is held down in Pond view: where the stroke last left a wake
   // point (so the wake runs evenly along its path), and how far it has gone.
   const stirRef = useRef<{ x: number; y: number; at: number; travelled: number } | null>(null);
+  const swishRef = useRef(0);
   return {
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
       const point = toPond(event);
@@ -643,11 +644,19 @@ function usePondControls(
       if (moved < STIR_SPACING) return;
       const dx = (point.x - last.x) / moved;
       const dy = (point.y - last.y) / moved;
+      const speed = moved / Math.max(0.008, (now - last.at) / 1000);
+      const strength = Math.min(1, 0.35 + speed / 90);
       const steps = Math.min(48, Math.floor(moved / STIR_SPACING));
       for (let index = 1; index <= steps; index++) {
         const x = last.x + dx * index * STIR_SPACING;
         const y = last.y + dy * index * STIR_SPACING;
-        if (y > SHORE_ROWS + 1) addWake(world.pond, x, y, dx, dy);
+        if (y > SHORE_ROWS + 1) addWake(world.pond, x, y, dx, dy, strength);
+      }
+      stir(world.pond, point.x, point.y, dx, dy, speed);
+      // Every so often, and only while moving, the water swishes.
+      if (now - swishRef.current > 160) {
+        swishRef.current = now;
+        ambience.swish(strength);
       }
       stirRef.current = {
         x: last.x + dx * steps * STIR_SPACING,
@@ -676,8 +685,13 @@ function usePondControls(
       if (view === "catch" && world.sukui) {
         play(tap(world.sukui, world.pond, Math.random));
       } else {
-        // Hold and drag to stir; a plain click feeds on release.
+        // Hold and drag to stir; a plain click feeds on release. The stick touches
+        // the water with a small ring.
         stirRef.current = { ...point, at: performance.now(), travelled: 0 };
+        if (point.y > SHORE_ROWS + 1) {
+          addRipple(world.pond, point.x, point.y, 3, 4);
+          ambience.dip();
+        }
       }
     },
     onKeyDown: (event: KeyboardEvent<HTMLElement>) => {

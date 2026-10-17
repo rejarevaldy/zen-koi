@@ -11,6 +11,7 @@ import {
   seededRng,
   seedOf,
   stepPond,
+  stir,
   syncKoi,
   type Pond,
   type StepContext,
@@ -136,4 +137,22 @@ test("harder rain lands more rings on the water", () => {
     return count;
   };
   assert.ok(rings(1) > rings(0.3) * 2);
+});
+
+test("a stroke carries floating food along, and a quick one startles a koi nearby", () => {
+  const rng = seededRng(4);
+  const pond = newPond(200, 32, 8, 32);
+  syncKoi(pond, defaultConfig(0).koi.slice(0, 1), 0, rng);
+  pond.food.push({ id: 99, x: 50, y: 20, ageMs: 0 });
+  stir(pond, 49, 20, 1, 0, 30);
+  assert.ok(pond.food[0]!.x > 50, "the food moved with the stroke");
+
+  const koi = pond.koi[0]!;
+  koi.x = 100;
+  koi.y = 20;
+  koi.tx = 100;
+  stir(pond, 97, 20, 1, 0, 10);
+  assert.equal(koi.tx, 100, "a slow stroke leaves the koi be");
+  stir(pond, 97, 20, 1, 0, 80);
+  assert.ok(koi.tx > 110, "a quick stroke sends it darting away");
 });
