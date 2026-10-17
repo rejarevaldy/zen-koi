@@ -150,7 +150,7 @@ function scoop(sukui: Sukui, pond: Pond, rng: () => number, auto: boolean): Suku
     return events;
   }
   // Bigger koi weigh more on the paper.
-  sukui.paper -= (koi.length / 18) * 0.3 * WEAR[sukui.grade];
+  sukui.paper -= (koi.length / 15) * 0.3 * WEAR[sukui.grade];
   if (sukui.paper <= 0) {
     // Through the paper and back into the water.
     startle(koi, sukui, pond);

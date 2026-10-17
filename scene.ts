@@ -359,14 +359,14 @@ function rasterizeKoi(koi: Koi, scale = 1): Map<number, KoiPixel> {
     const point = bodyPoint(koi, s / scale);
     return { x: point.x * scale, y: point.y * scale };
   };
-  const sway = (u: number) => Math.sin(koi.phase - u * 3.2) * 0.65 * u * u * scale;
+  const sway = (u: number) => Math.sin(koi.phase - u * 3.2) * 0.45 * u * u * scale;
 
   // Tail: a long fan that opens behind the body and sways a beat after it.
   const tail = at(length);
   const before = at(length - scale);
   const back = unit(tail.x - before.x, tail.y - before.y);
   const side = { x: -back.y, y: back.x };
-  const flick = Math.sin(koi.phase - 3.8) * 1.1 * scale;
+  const flick = Math.sin(koi.phase - 3.8) * 0.8 * scale;
   const tailLength = 4.5 * scale;
   for (let k = 0.5; k <= tailLength; k += 0.5) {
     const spread = (0.7 + (k / scale) * 0.72) * scale;
@@ -477,24 +477,10 @@ export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle
     ctx.fillStyle = style.shade;
     for (const key of pixels.keys()) ctx.fillRect(xOf(key) + ox, yOf(key) + oy, 1, 1);
   }
-  // A soft line of darker water only along the lower and right edges, as if
-  // lit from the upper left: enough to lift the koi off the water, never a hard
-  // contour. Fins stay soft, with no line.
-  const outline = new Set<number>();
-  for (const [key, pixel] of pixels) {
-    if (pixel.fin) continue;
-    for (const next of [key + 1, key + KEY_WIDTH]) {
-      if (!pixels.has(next)) outline.add(next);
-    }
-  }
-  ctx.globalAlpha = 0.3 * (1 - koi.depth * 0.6);
-  ctx.fillStyle = mix(style.water, "#081014", 0.55);
-  for (const key of outline) ctx.fillRect(xOf(key), yOf(key), 1, 1);
-
   // A koi has only a few colors: shade each once, then fill its pixels together.
   // Its edge pixels are a little see-through, so the silhouette melts into the
   // water instead of stepping.
-  const depth = koi.depth * 0.32;
+  const depth = koi.depth * 0.38;
   const isEdge = (key: number) =>
     !pixels.has(key + 1) || !pixels.has(key - 1) || !pixels.has(key + KEY_WIDTH) || !pixels.has(key - KEY_WIDTH);
   const groups = new Map<string, number[]>();
