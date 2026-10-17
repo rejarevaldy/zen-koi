@@ -504,7 +504,7 @@ function rasterGrid(koi: Koi, scale: number): KoiGrid {
 
   // Colors, once per pixel, shared within a small cell: scale patterns stay
   // about two screen pixels wide on a finer koi.
-  const cell = scale > 1 ? 2 : 1;
+  const cell = scale >= 2 ? 2 : 1;
   const cellColors = new Map<number, string>();
   for (let gy = used.y0; gy <= used.y1; gy++) {
     for (let gx = used.x0; gx <= used.x1; gx++) {
@@ -534,7 +534,7 @@ function rasterGrid(koi: Koi, scale: number): KoiGrid {
     const eye = at(1.2 * scale);
     const across = { x: -headDirection.y, y: headDirection.x };
     const reach = radiusAt(0.1) * scale * 0.8;
-    const size = scale > 1 ? 2 : 1;
+    const size = scale >= 2 ? 2 : 1;
     for (const sign of [-1, 1]) {
       const x = Math.floor(eye.x + across.x * sign * reach);
       const y = Math.floor(eye.y + across.y * sign * reach);
@@ -557,6 +557,14 @@ export type KoiStyle = {
   dimAmount: number;
 };
 
+/**
+ * Koi are laid out this much finer than the pond, so each koi pixel is a block
+ * of PIXEL_SCALE / KOI_SCALE (2x2) screen pixels: still pixel art, but a
+ * smoother outline and smaller steps than the pond's 3x3 pixels.
+ */
+const KOI_SCALE = 1.5;
+const KOI_BLOCK = PIXEL_SCALE / KOI_SCALE;
+
 /** The koi of one paint, drawn into one buffer at PIXEL_SCALE: see `paintFineKoi`. */
 type KoiLayer = { canvas: HTMLCanvasElement; image: ImageData };
 
@@ -574,19 +582,26 @@ function paintFineKoi(
   y0: number,
   gridOf: (koi: Koi) => KoiGrid,
 ) {
-  const scale = PIXEL_SCALE;
+  const scale = KOI_SCALE;
   const { image } = layer;
   const data = image.data;
   data.fill(0);
-  const top = y0 * scale;
+  const top = y0 * PIXEL_SCALE;
+  // One koi pixel is a KOI_BLOCK square of screen pixels.
   const put = (x: number, y: number, [r, g, b]: Rgb, alpha: number) => {
-    const row = y - top;
-    if (x < 0 || x >= image.width || row < 0 || row >= image.height) return;
-    const at = (row * image.width + x) * 4;
-    data[at] = r;
-    data[at + 1] = g;
-    data[at + 2] = b;
-    data[at + 3] = alpha * 255;
+    for (let by = 0; by < KOI_BLOCK; by++) {
+      const row = y * KOI_BLOCK + by - top;
+      if (row < 0 || row >= image.height) continue;
+      for (let bx = 0; bx < KOI_BLOCK; bx++) {
+        const column = x * KOI_BLOCK + bx;
+        if (column < 0 || column >= image.width) continue;
+        const at = (row * image.width + column) * 4;
+        data[at] = r;
+        data[at + 1] = g;
+        data[at + 2] = b;
+        data[at + 3] = alpha * 255;
+      }
+    }
   };
   const grids = koi.map((fish) => ({ fish, grid: gridOf(fish) }));
   // The shadow on the bed: farther from the fish the nearer it is to the surface.
@@ -629,13 +644,13 @@ function paintFineKoi(
         cells[i - 1] === 0 || cells[i + 1] === 0 || cells[i - w] === 0 || cells[i + w] === 0;
       const isFin = fins[i] === 1;
       const shade = shades[cell - 1]!;
-      put(grid.x0 + gx, grid.y0 + gy, isFin ? shade.fin : shade.body, isFin ? 0.8 : edge ? 0.7 : 1);
+      put(grid.x0 + gx, grid.y0 + gy, isFin ? shade.fin : shade.body, isFin ? 0.8 : edge ? 0.8 : 1);
       }
     }
   }
   const fine = layer.canvas.getContext("2d")!;
   fine.putImageData(image, 0, 0);
-  ctx.drawImage(layer.canvas, 0, y0, image.width / scale, image.height / scale);
+  ctx.drawImage(layer.canvas, 0, y0, image.width / PIXEL_SCALE, image.height / PIXEL_SCALE);
 }
 
 export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle, scale = 1) {
@@ -841,7 +856,7 @@ export class PondPainter {
       }
       const gridOf = (koi: Koi) => {
         let grid = this.#grids.get(koi);
-        if (!grid) this.#grids.set(koi, (grid = rasterGrid(koi, PIXEL_SCALE)));
+        if (!grid) this.#grids.set(koi, (grid = rasterGrid(koi, KOI_SCALE)));
         return grid;
       };
       paintFineKoi(ctx, this.#koiLayer(rows), inView, style, y0, gridOf);
