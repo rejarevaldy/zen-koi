@@ -62,6 +62,8 @@ const PAGE_PATH = "pond";
 const SETTINGS_ACTION = "pond-settings";
 
 const FRAME_MS = 40;
+/** At most one ring this often while the pointer stirs the water. */
+const STIR_MS = 90;
 /** Under reduced motion nothing moves; the pond only redraws for changes. */
 const STILL_FRAME_MS = 500;
 /** Hidden or off-screen ponds rest instead of swimming unseen. */
@@ -599,10 +601,27 @@ function usePondControls(
     dropFood(world.pond, x, y, Math.random);
     ambience.plop();
   };
+  // Where the pointer last stirred the water, so a stroke leaves a trail of rings.
+  const stirRef = useRef<{ x: number; y: number; at: number } | null>(null);
   return {
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
       const point = toPond(event);
-      if (point && view === "pond") attend(world.pond, point.x, point.y);
+      if (!point || view !== "pond") return;
+      attend(world.pond, point.x, point.y);
+      // Trailing a finger through the water: a small ring every few pixels, bigger for a quick stroke.
+      const now = performance.now();
+      const last = stirRef.current;
+      const moved = last ? Math.hypot(point.x - last.x, point.y - last.y) : 0;
+      if (!last || now - last.at > 400) {
+        stirRef.current = { ...point, at: now };
+      } else if (moved >= 3 && now - last.at >= STIR_MS && point.y > SHORE_ROWS) {
+        const speed = moved / ((now - last.at) / 1000);
+        addRipple(world.pond, point.x, point.y, Math.min(6, 2.5 + speed / 40), 6);
+        stirRef.current = { ...point, at: now };
+      }
+    },
+    onPointerLeave: () => {
+      stirRef.current = null;
     },
     onPointerDown: (event: PointerEvent<HTMLElement>) => {
       if (event.button !== 0) return;
@@ -958,7 +977,7 @@ function ThreadPond({
           aria-label={
             view === "catch"
               ? CATCH_HINT
-              : "Koi pond. Click to scatter a little food."
+              : "Koi pond. Move across the water to stir it; click to scatter a little food."
           }
           className="block w-full cursor-pointer touch-none overflow-hidden outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           style={{ height: STRIP_ROWS * PIXEL_SCALE }}
@@ -1298,7 +1317,7 @@ function ZenPondPage({ threadId }: { threadId?: string } = {}) {
             aria-label={
               view === "catch"
                 ? CATCH_HINT
-                : "Koi pond. Click to scatter a little food."
+                : "Koi pond. Move across the water to stir it; click to scatter a little food."
             }
             className="block w-full cursor-pointer touch-none overflow-hidden outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
             style={{ height: (threadId ? STRIP_ROWS : PAGE_ROWS) * PIXEL_SCALE }}

@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-zen-koi",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "private": true,
   "description": "A quiet pixel-art koi pond above the chat input while the thread's agent works.",
   "keywords": [
