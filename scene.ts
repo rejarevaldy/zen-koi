@@ -352,7 +352,38 @@ function unit(x: number, y: number) {
  * multiplies every coordinate, for a koi drawn bigger or smaller than life.
  */
 function rasterizeKoi(koi: Koi, scale = 1): Map<number, KoiPixel> {
+  const grid = rasterGrid(koi, scale);
   const pixels = new Map<number, KoiPixel>();
+  const { used } = grid;
+  for (let gy = used.y0; gy <= used.y1; gy++) {
+    for (let gx = used.x0; gx <= used.x1; gx++) {
+      const i = gy * grid.w + gx;
+      const cell = grid.cells[i]!;
+      if (cell === 0) continue;
+      pixels.set(keyOf(grid.x0 + gx, grid.y0 + gy), { color: grid.palette[cell - 1]!, fin: grid.fins[i] === 1 });
+    }
+  }
+  return pixels;
+}
+
+/**
+ * One koi's pixels in a small grid: `cells` holds a palette index plus one (0
+ * is empty), `fins` marks fin pixels. Typed arrays keep a finer koi, with nine
+ * times the pixels, cheap to draw every frame.
+ */
+type KoiGrid = {
+  x0: number;
+  y0: number;
+  w: number;
+  h: number;
+  /** The part of the grid the koi covers, inclusive, in grid coordinates. */
+  used: { x0: number; y0: number; x1: number; y1: number };
+  cells: Int16Array;
+  fins: Uint8Array;
+  palette: string[];
+};
+
+function rasterGrid(koi: Koi, scale: number): KoiGrid {
   const length = koi.length * scale;
   const fin = finColor(koi);
   const at = (s: number) => {
@@ -360,6 +391,50 @@ function rasterizeKoi(koi: Koi, scale = 1): Map<number, KoiPixel> {
     return { x: point.x * scale, y: point.y * scale };
   };
   const sway = (u: number) => Math.sin(koi.phase - u * 3.2) * 0.45 * u * u * scale;
+
+  // Bounds: the spine, padded by the widest body, the tail fan, and the fins.
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let s = 0; s <= length; s += scale) {
+    const point = at(s);
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minY = Math.min(minY, point.y);
+    maxY = Math.max(maxY, point.y);
+  }
+  const pad = Math.ceil(6 * scale) + 2;
+  const x0 = Math.floor(minX) - pad;
+  const y0 = Math.floor(minY) - pad;
+  const w = Math.ceil(maxX) - x0 + pad + 1;
+  const h = Math.ceil(maxY) - y0 + pad + 1;
+  const cells = new Int16Array(w * h);
+  const fins = new Uint8Array(w * h);
+  const palette: string[] = [];
+  const paletteIndex = new Map<string, number>();
+  const used = { x0: w, y0: h, x1: -1, y1: -1 };
+  const indexOf = (x: number, y: number) => {
+    const gx = x - x0;
+    const gy = y - y0;
+    if (gx < 0 || gy < 0 || gx >= w || gy >= h) return -1;
+    if (gx < used.x0) used.x0 = gx;
+    if (gx > used.x1) used.x1 = gx;
+    if (gy < used.y0) used.y0 = gy;
+    if (gy > used.y1) used.y1 = gy;
+    return gy * w + gx;
+  };
+  const paint = (i: number, color: string, isFin: boolean) => {
+    if (i < 0) return;
+    let index = paletteIndex.get(color);
+    if (index === undefined) {
+      index = palette.length;
+      palette.push(color);
+      paletteIndex.set(color, index);
+    }
+    cells[i] = index + 1;
+    fins[i] = isFin ? 1 : 0;
+  };
 
   // Tail: a long fan that opens behind the body and sways a beat after it.
   const tail = at(length);
@@ -376,7 +451,7 @@ function rasterizeKoi(koi: Koi, scale = 1): Map<number, KoiPixel> {
       const bend = flick * (k / tailLength);
       const x = Math.floor(tail.x + back.x * k + side.x * (across + bend));
       const y = Math.floor(tail.y + back.y * k + side.y * (across + bend));
-      pixels.set(keyOf(x, y), { color: fin, fin: true });
+      paint(indexOf(x, y), fin, true);
     }
   }
 
@@ -388,17 +463,21 @@ function rasterizeKoi(koi: Koi, scale = 1): Map<number, KoiPixel> {
   const beat = Math.sin(koi.phase * 0.7) * 0.5 + 0.5;
   for (const sign of [-1, 1]) {
     for (let k = 0; k <= 1.6 * scale; k += 0.5) {
-      for (let w = 0; w <= 0.8 * scale; w += 0.5) {
+      for (let wide = 0; wide <= 0.8 * scale; wide += 0.5) {
         const reach = radiusAt(0.22) * scale + 0.3 + k * (0.55 + beat * 0.35);
-        const x = Math.floor(shoulder.x + normal.x * sign * reach - forward.x * (k + w + 0.4));
-        const y = Math.floor(shoulder.y + normal.y * sign * reach - forward.y * (k + w + 0.4));
-        pixels.set(keyOf(x, y), { color: fin, fin: true });
+        const x = Math.floor(shoulder.x + normal.x * sign * reach - forward.x * (k + wide + 0.4));
+        const y = Math.floor(shoulder.y + normal.y * sign * reach - forward.y * (k + wide + 0.4));
+        paint(indexOf(x, y), fin, true);
       }
     }
   }
 
+  // The body: overlapping circles along the spine. Slices overlap, so each pixel
+  // only remembers where it sits on the body (u along, v across); its color is
+  // worked out once, below. Slices sit about 40% of the body's width apart.
+  const body = new Int32Array(w * h);
   let headDirection = { x: Math.cos(koi.heading), y: Math.sin(koi.heading) };
-  for (let s = length; s >= 0; s -= 0.5) {
+  for (let s = length; s >= 0; s -= Math.max(0.5, radiusAt(s / length) * scale * 0.4)) {
     const u = s / length;
     const point = at(s);
     const next = at(Math.max(0, s - 0.75));
@@ -409,33 +488,65 @@ function rasterizeKoi(koi: Koi, scale = 1): Map<number, KoiPixel> {
     const cx = point.x + across.x * offset;
     const cy = point.y + across.y * offset;
     const r = radiusAt(u) * scale;
+    const packedU = Math.round(u * 1023) * 4096;
     for (let py = Math.floor(cy - r - 1); py <= Math.ceil(cy + r); py++) {
       for (let px = Math.floor(cx - r - 1); px <= Math.ceil(cx + r); px++) {
         const dx = px + 0.5 - cx;
         const dy = py + 0.5 - cy;
         if (dx * dx + dy * dy > r * r + 0.15) continue;
-        const v = (dx * across.x + dy * across.y) / Math.max(0.6, r);
-        let color = koiColor(koi, u, v, px, py);
-        // Light from above: a sheen down the back, shade along the flanks.
-        if (Math.abs(v) < 0.22 && u > 0.08 && u < 0.7) color = mix(color, "#ffffff", 0.16);
-        else if (Math.abs(v) > 0.76) color = mix(color, "#000000", 0.2);
-        pixels.set(keyOf(px, py), { color, fin: false });
+        const i = indexOf(px, py);
+        if (i < 0) continue;
+        const v = Math.max(-1, Math.min(1, (dx * across.x + dy * across.y) / Math.max(0.6, r)));
+        body[i] = packedU + Math.round((v + 1) * 1023) + 1;
       }
     }
   }
 
-  // Eyes, once the koi is big enough to show them.
+  // Colors, once per pixel, shared within a small cell: scale patterns stay
+  // about two screen pixels wide on a finer koi.
+  const cell = scale > 1 ? 2 : 1;
+  const cellColors = new Map<number, string>();
+  for (let gy = used.y0; gy <= used.y1; gy++) {
+    for (let gx = used.x0; gx <= used.x1; gx++) {
+    const i = gy * w + gx;
+    const packed = body[i]! - 1;
+    if (packed < 0) continue;
+    const u = Math.floor(packed / 4096) / 1023;
+    const v = (packed % 4096) / 1023 - 1;
+    const cx = Math.floor((x0 + gx) / cell);
+    const cy = Math.floor((y0 + gy) / cell);
+    const band = Math.abs(v) < 0.22 && u > 0.08 && u < 0.7 ? 1 : Math.abs(v) > 0.76 ? 2 : 0;
+    const memo = keyOf(cx, cy) * 4 + band;
+    let color = cellColors.get(memo);
+    if (!color) {
+      color = koiColor(koi, u, v, cx, cy);
+      // Light from above: a sheen down the back, shade along the flanks.
+      if (band === 1) color = mix(color, "#ffffff", 0.16);
+      else if (band === 2) color = mix(color, "#000000", 0.2);
+      cellColors.set(memo, color);
+    }
+    paint(i, color, false);
+    }
+  }
+
+  // Eyes: two pixels across on a finer koi, so they still show.
   if (length >= 6) {
     const eye = at(1.2 * scale);
     const across = { x: -headDirection.y, y: headDirection.x };
     const reach = radiusAt(0.1) * scale * 0.8;
+    const size = scale > 1 ? 2 : 1;
     for (const sign of [-1, 1]) {
       const x = Math.floor(eye.x + across.x * sign * reach);
       const y = Math.floor(eye.y + across.y * sign * reach);
-      if (pixels.has(keyOf(x, y))) pixels.set(keyOf(x, y), { color: "#1a1714", fin: false });
+      for (let ey = 0; ey < size; ey++) {
+        for (let ex = 0; ex < size; ex++) {
+          const i = indexOf(x + ex, y + ey);
+          if (i >= 0 && cells[i] !== 0) paint(i, "#1a1714", false);
+        }
+      }
     }
   }
-  return pixels;
+  return { x0, y0, w, h, used, cells, fins, palette };
 }
 
 export type KoiStyle = {
@@ -446,24 +557,85 @@ export type KoiStyle = {
   dimAmount: number;
 };
 
+/** The koi of one paint, drawn into one buffer at PIXEL_SCALE: see `paintFineKoi`. */
+type KoiLayer = { canvas: HTMLCanvasElement; image: ImageData };
+
 /**
- * Draws a koi so it glides: its pixels stay whole pond pixels, laid out from
- * its own position, and the whole koi moves in steps of one screen pixel (a
- * third of a pond pixel) on a canvas drawn at PIXEL_SCALE.
+ * Draws koi at one pixel per screen pixel (PIXEL_SCALE finer than the pond), on
+ * a canvas drawn at PIXEL_SCALE, so their outline is smooth and they move a
+ * screen pixel at a time. Every koi and its shadow go into one shared buffer,
+ * uploaded and drawn once: shadows first, then bodies from the deepest up.
  */
-function drawGliding(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle) {
-  const fx = koi.x - Math.floor(koi.x);
-  const fy = koi.y - Math.floor(koi.y);
-  const settled: Koi = {
-    ...koi,
-    x: koi.x - fx,
-    y: koi.y - fy,
-    trail: koi.trail.map((point) => ({ x: point.x - fx, y: point.y - fy })),
+function paintFineKoi(
+  ctx: CanvasRenderingContext2D,
+  layer: KoiLayer,
+  koi: readonly Koi[],
+  style: KoiStyle,
+  y0: number,
+  gridOf: (koi: Koi) => KoiGrid,
+) {
+  const scale = PIXEL_SCALE;
+  const { image } = layer;
+  const data = image.data;
+  data.fill(0);
+  const top = y0 * scale;
+  const put = (x: number, y: number, [r, g, b]: Rgb, alpha: number) => {
+    const row = y - top;
+    if (x < 0 || x >= image.width || row < 0 || row >= image.height) return;
+    const at = (row * image.width + x) * 4;
+    data[at] = r;
+    data[at + 1] = g;
+    data[at + 2] = b;
+    data[at + 3] = alpha * 255;
   };
-  ctx.save();
-  ctx.translate(Math.round(fx * PIXEL_SCALE) / PIXEL_SCALE, Math.round(fy * PIXEL_SCALE) / PIXEL_SCALE);
-  drawKoi(ctx, settled, style);
-  ctx.restore();
+  const grids = koi.map((fish) => ({ fish, grid: gridOf(fish) }));
+  // The shadow on the bed: farther from the fish the nearer it is to the surface.
+  if (style.shade) {
+    const shade = rgb(style.shade);
+    for (const { fish, grid } of grids) {
+      const lift = 1 - fish.depth;
+      const ox = Math.round((1 + lift * 1.5) * scale);
+      const oy = Math.round((1 + lift * 2) * scale);
+      const alpha = 0.26 * (1 - fish.depth * 0.5);
+      const { used } = grid;
+      for (let gy = used.y0; gy <= used.y1; gy++) {
+        for (let gx = used.x0; gx <= used.x1; gx++) {
+          if (grid.cells[gy * grid.w + gx] !== 0) put(grid.x0 + gx + ox, grid.y0 + gy + oy, shade, alpha);
+        }
+      }
+    }
+  }
+  // A koi has only a few colors: shade each once. Its edge pixels are a little
+  // see-through, so the silhouette melts into the water.
+  for (const { fish, grid } of grids) {
+    const depth = fish.depth * 0.38;
+    const { cells, fins, w, h } = grid;
+    const shades = grid.palette.map((color) => {
+      const toned = (base: string) => {
+        let shade = mix(base, style.water, depth);
+        if (style.dimAmount > 0) shade = mix(shade, style.dim, style.dimAmount * 0.3);
+        return rgb(shade);
+      };
+      return { body: toned(color), fin: toned(mix(color, style.water, 0.4)) };
+    });
+    const { used } = grid;
+    for (let gy = used.y0; gy <= used.y1; gy++) {
+      for (let gx = used.x0; gx <= used.x1; gx++) {
+      const i = gy * w + gx;
+      const cell = cells[i]!;
+      if (cell === 0) continue;
+      const edge =
+        gx === 0 || gy === 0 || gx === w - 1 || gy === h - 1 ||
+        cells[i - 1] === 0 || cells[i + 1] === 0 || cells[i - w] === 0 || cells[i + w] === 0;
+      const isFin = fins[i] === 1;
+      const shade = shades[cell - 1]!;
+      put(grid.x0 + gx, grid.y0 + gy, isFin ? shade.fin : shade.body, isFin ? 0.8 : edge ? 0.7 : 1);
+      }
+    }
+  }
+  const fine = layer.canvas.getContext("2d")!;
+  fine.putImageData(image, 0, 0);
+  ctx.drawImage(layer.canvas, 0, y0, image.width / scale, image.height / scale);
 }
 
 export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, style: KoiStyle, scale = 1) {
@@ -564,6 +736,23 @@ export class PondPainter {
   /** Where the tree hangs over the water; petals fall from here. */
   canopy: Region | null = null;
 
+  #koiLayers = new Map<number, KoiLayer>();
+  #grids = new Map<Koi, KoiGrid>();
+  #gridsAt = -1;
+
+  /** The koi buffer for a view `rows` tall, one per view, kept between frames. */
+  #koiLayer(rows: number): KoiLayer {
+    const width = this.width * PIXEL_SCALE;
+    const height = rows * PIXEL_SCALE;
+    let layer = this.#koiLayers.get(rows);
+    if (!layer || layer.image.width !== width) {
+      const canvas = newCanvas(width, height);
+      layer = { canvas, image: canvas.getContext("2d")!.createImageData(width, height) };
+      this.#koiLayers.set(rows, layer);
+    }
+    return layer;
+  }
+
   /** Rebuilds the cached layers when the pond's size or look changes. */
   layout(width: number, height: number, focusBottom: number, env: Environment) {
     const garden = env.garden;
@@ -642,8 +831,20 @@ export class PondPainter {
       dimAmount: light.dimAmount,
     };
     const byDepth = pond.koi.filter((koi) => !koi.away).sort((a, b) => b.depth - a.depth);
-    for (const koi of byDepth) {
-      if (koi.y > y0 - 20 && koi.y < y1 + 20) drawGliding(ctx, koi, style);
+    const inView = byDepth.filter((koi) => koi.y > y0 - 20 && koi.y < y1 + 20);
+    if (inView.length > 0) {
+      // The strip and the chat input are painted in the same frame: each koi is
+      // laid out once for both.
+      if (now !== this.#gridsAt) {
+        this.#gridsAt = now;
+        this.#grids.clear();
+      }
+      const gridOf = (koi: Koi) => {
+        let grid = this.#grids.get(koi);
+        if (!grid) this.#grids.set(koi, (grid = rasterGrid(koi, PIXEL_SCALE)));
+        return grid;
+      };
+      paintFineKoi(ctx, this.#koiLayer(rows), inView, style, y0, gridOf);
     }
     if (sukui?.dipped) paintPoi(ctx, sukui, light, now);
 

@@ -105,10 +105,10 @@ export function defaultConfig(now: number): PondConfig {
   };
 }
 
-/** Body length in pond pixels: 10 when new, 15 after two weeks. */
+/** Body length in pond pixels: 9 when new, 14 after two weeks. */
 export function koiLength(addedAt: number, now: number): number {
   const days = Math.max(0, (now - addedAt) / DAY_MS);
-  return 10 + Math.min(5, Math.floor(days / 2.8));
+  return 9 + Math.min(5, Math.floor(days / 2.8));
 }
 
 /** Size shown to the player: 15 cm when new, 45 cm after two weeks, a little more each day. */
